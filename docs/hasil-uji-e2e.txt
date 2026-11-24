@@ -1,0 +1,48 @@
+PASS Halaman SPA tersaji dengan CSP tanpa skrip inline
+PASS Aset statis vendor dan JS dapat dimuat
+PASS CSRF: tanpa header khusus atau dari origin lain ditolak
+PASS Aksi terproteksi tanpa sesi -> UNAUTHORIZED
+PASS Registrasi: validasi password, honeypot, email
+PASS Registrasi + verifikasi email (superadmin)
+PASS Login, sesi cookie httpOnly, auth.me
+PASS Login gagal: pesan generik
+PASS MFA TOTP: aktivasi, kode pemulihan, login 2 langkah
+PASS MFA: kode TOTP yang sama tidak bisa dipakai ulang
+PASS MFA: masuk dengan kode pemulihan sekali pakai
+PASS Daftar sesi aktif dan cabut sesi lain
+PASS Shortlink: buat, slug kustom, 302 redirect, klik tercatat
+PASS Shortlink: kunjungan via QR (?q=1) tercatat sebagai sumber qr
+PASS Shortlink: bot/crawler tidak dihitung
+PASS Shortlink: tujuan berbahaya/privat dan slug terlarang ditolak
+PASS Shortlink: link berpassword lewat halaman perantara
+PASS Shortlink: batas klik atomik (maxClicks)
+PASS Shortlink: nonaktif, slug tak dikenal, edit tujuan + riwayat versi
+PASS Shortlink: impor massal + daftar + ekspor CSV
+PASS Laporan penyalahgunaan publik masuk ke antrean admin
+PASS Unggah PDF via signed URL Storage
+PASS Unggahan bukan PDF ditolak
+PASS Atur penanda tangan berurutan + field, lalu kirim
+PASS Undangan tanda tangan berurutan: hanya penanda pertama yang menerima email
+PASS OTP penanda tangan: kode salah dihitung, token palsu ditolak
+PASS Penanda 1 menandatangani (OTP email + persetujuan + hash dokumen)
+PASS Penanda 2 diundang setelah giliran, kode akses wajib
+PASS Dokumen selesai: PDF final + sertifikat dibuat otomatis, email terkirim
+PASS Verifikasi publik: kode dokumen, sidik jari final/sertifikat, berkas diubah
+ERROR:  Tabel signature_events bersifat append-only
+CONTEXT:  PL/pgSQL function forbid_mutation() line 4 at RAISE
+PASS Rantai hash jejak tanda tangan utuh dan append-only
+PASS Penanda yang sudah selesai bisa mengunduh sertifikat tetapi tidak bisa menandatangani ulang
+PASS Undang anggota (viewer), terima undangan sebagai akun baru
+PASS RBAC: viewer hanya bisa membaca
+PASS IDOR: pengguna ruang kerja lain tidak bisa membaca data
+PASS Ubah peran anggota mencabut sesi anggota
+PASS Supabase REST langsung (anon key) tidak bisa membaca tabel
+PASS Jejak audit: rantai hash utuh + ekspor butuh reauth
+ERROR:  Tabel audit_log bersifat append-only
+CONTEXT:  PL/pgSQL function forbid_mutation() line 4 at RAISE
+PASS Audit append-only; pengubahan terdeteksi oleh verifikasi rantai
+PASS Rate limit login per akun
+PASS Cron harian: tanpa rahasia 401, dengan rahasia 200
+PASS Pemindai: kenali shortlink milik sendiri
+
+RINGKASAN: 42/42 PASS

@@ -1,0 +1,37 @@
+{
+  "name": "smartsign",
+  "version": "2.0.0",
+  "private": true,
+  "description": "SmartSign: shortlink, QR/barcode, dan tanda tangan elektronik (Next.js + Supabase)",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "postinstall": "node scripts/copy-vendor.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node tests/e2e/run.mjs",
+    "test:ui": "node tests/ui/shots.mjs docs/screenshots"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.119.2",
+    "jsqr": "^1.4.0",
+    "next": "^16.4.6",
+    "nodemailer": "^10.6.1",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.5.438",
+    "postgres": "^4.1.1",
+    "qrcode-generator": "^1.4.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/nodemailer": "^8.0.2",
+    "@types/react": "^19.3.0",
+    "typescript": "^7.0.2"
+  }
+}
