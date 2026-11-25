@@ -11,7 +11,8 @@ export async function GET() {
     APP_URL: ENV.appUrl, NEXT_PUBLIC_SUPABASE_URL: ENV.supabaseUrl || 'BELUM DIISI',
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: !!ENV.supabasePublicKey, SUPABASE_SECRET_KEY: !!ENV.supabaseSecretKey,
     DATABASE_URL: !!ENV.databaseUrl, APP_SECRET: ENV.appSecret.length >= 32 ? true : ENV.appSecret ? 'terlalu pendek (min 32)' : false,
-    SUPERADMIN_EMAILS: ENV.superadminEmails.length, SMTP_URL: !!ENV.smtpUrl, CRON_SECRET: !!ENV.cronSecret
+    SUPERADMIN_EMAILS: ENV.superadminEmails.length, SMTP_URL: !!ENV.smtpUrl, CRON_SECRET: !!ENV.cronSecret,
+    MAYAR_API_KEY: !!ENV.mayarApiKey, MAYAR_WEBHOOK_TOKEN: !!ENV.mayarWebhookToken
   };
   const checks: Record<string, string> = {};
   const hint = (m: string) => {
@@ -26,6 +27,8 @@ export async function GET() {
   try {
     await db()`select 1 from platform_settings limit 1`;
     checks.database = 'OK';
+    try { await db()`select 1 from payments limit 1`; await db()`select public.session_active(gen_random_uuid(), gen_random_uuid())`; checks.migrasi = 'OK'; }
+    catch { checks.migrasi = 'GAGAL: Jalankan supabase/migrations/20261125000000_billing.sql di SQL Editor.'; }
   } catch (e: any) { checks.database = 'GAGAL: ' + hint(String(e?.message || e)); }
   try {
     const r = await fetch(ENV.supabaseUrl + '/auth/v1/settings', { headers: { apikey: ENV.supabasePublicKey } });

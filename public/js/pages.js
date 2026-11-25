@@ -10,12 +10,17 @@ const FIELD_SIZE = { signature: [0.26, 0.07], initial: [0.1, 0.05], name: [0.24,
 
 /* ================= Daftar dokumen ================= */
 Pages.docs = (c, r) => {
+  if (r.id === 'new' && !(State.me && State.me.esignEnabled)) { location.hash = '#/billing'; return; }
   if (r.id === 'new') return docNew(c);
   if (r.id && r.sub === 'edit') return docEdit(c, r.id);
   if (r.id) return docDetail(c, r.id);
   const st = { page: 1, q: '', status: r.params.status || '' };
+  const esign = !!(State.me && State.me.esignEnabled);
   c.appendChild(pageHead('E-Signature', 'Kirim PDF untuk ditandatangani dengan OTP email, persetujuan eksplisit, dan jejak audit berantai.',
-    can.edit() ? [h('a', { class: 'btn primary', href: '#/docs/new' }, icon('plus', 16), 'Dokumen baru')] : null));
+    can.edit() && esign ? [h('a', { class: 'btn primary', href: '#/docs/new' }, icon('plus', 16), 'Dokumen baru')] : null));
+  if (!esign) c.appendChild(h('div', { class: 'callout warn', style: 'margin-bottom:16px' }, h('b', null, 'Fitur berbayar. '),
+    'Mengirim dokumen untuk ditandatangani klien tersedia di paket Pro 3 Bulan (Rp50.000) dan Lifetime (Rp100.000). ',
+    h('a', { href: '#/billing' }, 'Lihat paket')));
   c.appendChild(h('div', { class: 'callout info', style: 'margin-bottom:16px' }, h('b', null, 'Jenis tanda tangan: '), BOOT.assurance + '. ',
     'Bukan tanda tangan digital tersertifikasi PSrE. Untuk dokumen bernilai hukum tinggi, gunakan penyelenggara sertifikasi elektronik resmi.'));
   const q = h('input', { type: 'search', placeholder: 'Cari judul, kode, atau penanda tangan…', 'aria-label': 'Cari dokumen' });
@@ -443,6 +448,7 @@ Pages.team = (c) => {
         h('td', { dataset: { label: 'Login terakhir' } }, h('span', { class: 'small', text: m.lastLoginAt ? dt(m.lastLoginAt) : '–' })),
         h('td', { dataset: { label: 'Aksi' } }, m.self ? null : h('div', { class: 'row', style: 'gap:4px;justify-content:flex-end' },
           h('button', { class: 'btn sm', onclick: (e) => memberStatus(e.currentTarget, m, m.status === 'aktif' ? 'nonaktif' : 'aktif') }, m.status === 'aktif' ? 'Nonaktifkan' : 'Aktifkan'),
+          h('button', { class: 'btn sm', onclick: (e) => withBusy(e.currentTarget, async () => { if (!(await confirmDialog('Kirim tautan reset password?', 'Tautan untuk membuat password baru akan dikirim ke email ' + m.email + '.', 'Kirim'))) return; try { const r = await callApi('team.sendReset', { membershipId: m.membershipId }); toast(r.message, 'ok'); } catch (er) { toastErr(er); } }) }, 'Reset password'),
           h('button', { class: 'btn sm', onclick: (e) => withBusy(e.currentTarget, async () => { try { const r = await callApi('team.revokeSessions', { membershipId: m.membershipId }); toast(r.revoked + ' sesi dicabut.', 'ok'); } catch (er) { toastErr(er); } }) }, 'Cabut sesi'),
           h('button', { class: 'btn sm danger', onclick: (e) => memberStatus(e.currentTarget, m, 'dihapus') }, 'Keluarkan'))))))))));
     if (dta.invites.length) body.appendChild(h('section', { class: 'card' }, h('h2', null, 'Undangan tertunda'), h('ul', null, dta.invites.map((i) => h('li', { class: 'row', style: 'padding:4px 0' }, h('span', { text: i.email + ' · ' + i.roleLabel + ' · berlaku sampai ' + d(i.expiresAt) }),
@@ -596,29 +602,3 @@ Pages.settings = (c) => {
 };
 
 /* ================= Platform (superadmin) ================= */
-Pages.platform = (c) => {
-  if (!can.superadmin()) return Pages.notFound(c);
-  c.appendChild(pageHead('Platform', 'Pengaturan global untuk seluruh ruang kerja (hanya superadmin).'));
-  const body = h('div');
-  c.appendChild(body);
-  const load = () => loadInto(body, () => callApi('platform.get', {}), (p) => {
-    const form = h('form', { novalidate: true, class: 'form-grid' },
-      h('div', { class: 'span-2' }, checkField('allowRegistration', 'Izinkan pendaftaran mandiri', p.allowRegistration)),
-      field('hashIterations', 'Iterasi hash password', { type: 'number', min: 500, max: 20000, value: p.hashIterations }, 'Jalankan runAllTests() untuk melihat durasi. Target ±300–800 ms.'),
-      field('retentionClickDays', 'Retensi data klik (hari)', { type: 'number', min: 30, max: 3650, value: p.retentionClickDays }),
-      field('globalBlocklist', 'Blocklist global (Script Properties)', { type: 'textarea', value: p.globalBlocklist, span: true }));
-    const btn = h('button', { class: 'btn primary', type: 'submit' }, 'Simpan');
-    form.appendChild(h('div', { class: 'span-2' }, btn));
-    form.addEventListener('submit', (e) => { e.preventDefault(); withBusy(btn, async () => { try { await callApi('platform.save', formData(form)); toast('Pengaturan platform disimpan.', 'ok'); load(); } catch (er) { showErrors(form, er); } }); });
-    body.appendChild(h('div', { class: 'grid grid-2' }, h('section', { class: 'card' }, h('h2', null, 'Global'), form),
-      h('section', { class: 'card' }, h('h2', null, 'Status layanan'), h('dl', { class: 'kv' }, h('dt', null, 'Sisa kuota email hari ini'), h('dd', { text: num(p.mailQuota) }),
-        h('dt', null, 'Domain pendek'), h('dd', { text: p.shortDomain || '(memakai URL web app)' }), h('dt', null, 'Google Safe Browsing'), h('dd', null, p.safeBrowsing ? badge('ok', 'Aktif') : badge('pending', 'Tidak dikonfigurasi'))))));
-    body.appendChild(h('section', { class: 'card' }, h('h2', null, 'Ruang kerja'), h('div', { class: 'table-wrap' }, h('table', { class: 'responsive' }, h('thead', null, h('tr', null, ['Nama', 'Paket', 'Status', 'Dibuat'].map((t) => h('th', { text: t })))),
-      h('tbody', null, p.workspaces.map((w) => h('tr', null, h('td', { dataset: { label: 'Nama' }, text: w.nama }),
-        h('td', { dataset: { label: 'Paket' } }, h('select', { 'aria-label': 'Paket ' + w.nama, onchange: (e) => upd(w.id, { plan: e.target.value }) }, [['free', 'Gratis'], ['pro', 'Pro'], ['org', 'Organisasi']].map((o) => h('option', { value: o[0], selected: o[0] === w.plan ? true : null }, o[1])))),
-        h('td', { dataset: { label: 'Status' } }, h('select', { 'aria-label': 'Status ' + w.nama, onchange: (e) => upd(w.id, { status: e.target.value }) }, [['aktif', 'Aktif'], ['ditangguhkan', 'Ditangguhkan']].map((o) => h('option', { value: o[0], selected: o[0] === w.status ? true : null }, o[1])))),
-        h('td', { dataset: { label: 'Dibuat' }, text: d(w.createdAt) }))))))));
-  });
-  async function upd(id, patch) { try { await callApi('platform.workspace', Object.assign({ workspaceId: id }, patch)); toast('Ruang kerja diperbarui.', 'ok'); } catch (e) { toastErr(e); load(); } }
-  load();
-};

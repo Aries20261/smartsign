@@ -209,11 +209,15 @@ export async function resetPassword(p: any) {
   const info = await reqInfo();
   const sb = await authClient();
   const claims = await currentClaims(sb);
-  if (!claims) throw new AppError('VALIDATION', 'Tautan reset tidak valid atau sudah kedaluwarsa. Minta tautan baru.');
+  // Hanya sesi yang dibuat dari tautan pemulihan (bukan sesi login biasa) dalam 1 jam terakhir.
+  const amr = Array.isArray((claims as any)?.amr) ? (claims as any).amr : [];
+  const fromRecovery = amr.some((m: any) => ['recovery', 'otp', 'magiclink'].includes(m?.method) && Date.now() / 1000 - Number(m?.timestamp || 0) < 3600);
+  if (!claims || !fromRecovery) throw new AppError('VALIDATION', 'Tautan reset tidak valid atau sudah kedaluwarsa. Minta tautan baru.');
   const email = String(claims.email || '');
   validatePassword(p.password, email);
   const { error } = await sb.auth.updateUser({ password: String(p.password) });
   if (error) throw vErr('password', authErrorMessage(error.message));
+  await db()`update profiles set must_change_password = false where id = ${claims.sub}`;
   await db()`select revoke_user_sessions(${claims.sub}, null, null)`;
   await sb.auth.signOut({ scope: 'local' }).catch(() => {});
   await rateReset('lf:' + email);
@@ -230,6 +234,7 @@ export async function changePassword(p: any, u: Ctx) {
   if (String(p.newPassword) === String(p.oldPassword)) throw vErr('newPassword', 'Password baru harus berbeda.');
   const r = await u.sb.auth.updateUser({ password: String(p.newPassword) });
   if (r.error) throw vErr('newPassword', authErrorMessage(r.error.message));
+  await db()`update profiles set must_change_password = false where id = ${u.userId}`;
   const [rv] = await db()`select revoke_user_sessions(${u.userId}, null, ${u.sessionId || null}) as n`;
   await audit(u, 'auth.changePassword', 'User', u.userId, null, { sesiLainDicabut: rv.n });
   await securityEvent('password_diubah', 'info', u, maskEmail(u.email));

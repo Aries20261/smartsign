@@ -1,10 +1,10 @@
 import { db, type Q } from '../db';
-import { APP, ENV, PLAN_LIMITS, shortUrlOf, type WsSettings } from '../config';
+import { APP, DEFAULT_WS_SETTINGS, ENV, PLAN_LIMITS, PUBLIC_WS_ID, shortUrlOf, type WsSettings } from '../config';
 import { AppError, vErr } from '../errors';
 import { audit, securityEvent } from '../audit';
 import { rateLimit, rateBump, rateCount } from '../ratelimit';
 import { platformSettings, requireReauth, wsSettings, type Ctx } from '../session';
-import { bool, hashSecret, int, isPast, ms, paginate, parseDateInput, parseUa, randomSlug, sha256Hex, str, todayWib, verifySecret, addSecIso } from '../util';
+import { randomToken, bool, hashSecret, int, isPast, ms, paginate, parseDateInput, parseUa, randomSlug, sha256Hex, str, todayWib, verifySecret, addSecIso } from '../util';
 
 export const RESERVED_SLUGS = ['admin', 'api', 'app', 'login', 'logout', 'masuk', 'daftar', 'verify', 'verifikasi', 'sign', 's', 'go', 'help', 'bantuan',
   'static', 'assets', 'vendor', 'js', 'dashboard', 'settings', 'reset', 'invite', 'report', 'auth', 'favicon.ico', 'robots.txt', 'sitemap.xml', '_next'];
@@ -129,7 +129,8 @@ function assertEdit(l: any, u: Ctx) { if (!canEditLink(l, u)) throw new AppError
 async function validateSlug(slug: string, selfId: string | null, q: Q = db()) {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(slug)) throw vErr('slug', '3–50 karakter: huruf, angka, "-" atau "_", diawali huruf/angka.');
   if (RESERVED_SLUGS.includes(slug.toLowerCase())) throw vErr('slug', 'Slug ini dicadangkan sistem.');
-  const [x] = await q`select id from links where lower(slug) = ${slug.toLowerCase()} and id is distinct from ${selfId}`;
+  const [x] = await q`select id from links where lower(slug) = ${slug.toLowerCase()} and id is distinct from ${selfId}
+    union all select link_id from retired_slugs where slug = ${slug.toLowerCase()} and link_id is distinct from ${selfId} limit 1`;
   if (x) throw new AppError('CONFLICT', 'Slug sudah dipakai.', { slug: 'Slug sudah dipakai (slug lama tidak dapat dipakai ulang), coba yang lain.' });
 }
 export async function checkSlug(p: any) {
@@ -140,7 +141,7 @@ export async function checkSlug(p: any) {
 async function generateSlug(q: Q) {
   for (let i = 0; i < 10; i++) {
     const s = randomSlug(7);
-    const [x] = await q`select 1 from links where lower(slug) = ${s.toLowerCase()}`;
+    const [x] = await q`select 1 from links where lower(slug) = ${s.toLowerCase()} union all select 1 from retired_slugs where slug = ${s.toLowerCase()}`;
     if (!x) return s;
   }
   throw new AppError('BUSY', 'Gagal membuat slug unik, coba lagi.');
@@ -242,6 +243,7 @@ export async function updateLink(p: any, u: Ctx) {
   const after = await db().begin(async (t) => {
     const before = await getWsLink(p.id, u, t, true);
     const [a] = await t`update links set ${t({ ...patch, updatedBy: u.userId } as never)} where id = ${before.id} returning *`;
+    if (a.slug !== before.slug) await t`insert into retired_slugs (slug, link_id) values (${String(before.slug).toLowerCase()}, ${a.id}) on conflict (slug) do nothing`;
     for (const f of ['destination', 'slug', 'title', 'expiresAt', 'activeFrom', 'maxClicks', 'campaign', 'tags', 'interstitial', 'notes']) {
       const o = before[f] == null ? '' : String(before[f]), n = a[f] == null ? '' : String(a[f]);
       if (o !== n) await t`insert into link_versions ${t({ linkId: a.id, workspaceId: u.workspaceId, field: f, oldValue: o, newValue: n, source: 'ui', createdBy: u.userId } as never)}`;
@@ -445,4 +447,55 @@ export async function saveCodeAsset(p: any, u: Ctx) {
     return a;
   });
   return { id: asset.id, version: asset.version, design };
+}
+
+/* ---------- Shortlink publik tanpa login ---------- */
+/**
+ * Siapa pun dapat membuat shortlink acak tanpa login (dibatasi per IP). Tautan disimpan di ruang kerja sistem
+ * dengan analitik minimal. Pembuat menerima "claim token" untuk memindahkan tautan ke ruang kerjanya setelah login,
+ * lalu dapat mengganti slug, tujuan, password, dsb.
+ */
+export async function shortenPublic(p: any, ipHash: string) {
+  if (p.website) return { link: null }; // honeypot bot
+  await rateLimit('anon:' + (ipHash || 'x'), 10, 3600, 'Batas 10 shortlink per jam tanpa login tercapai. Masuk atau daftar gratis untuk membuat lebih banyak.');
+  await rateLimit('anon-d:' + (ipHash || 'x'), 30, 86400, 'Batas harian shortlink tanpa login tercapai. Masuk atau daftar gratis untuk melanjutkan.');
+  await rateLimit('anon:all', 2000, 3600, 'Layanan sedang ramai. Coba lagi beberapa menit lagi.');
+  const dest = str(p.destination, 2000);
+  const a = await analyzeUrl(dest, null, DEFAULT_WS_SETTINGS);
+  if (!a.ok) throw vErr('destination', a.error);
+  if (a.score >= 40) {
+    await securityEvent('tautan_anonim_berisiko_ditolak', 'sedang', null, hostOf(a.url), { flags: a.flags });
+    throw vErr('destination', 'Tautan ini terdeteksi berisiko sehingga tidak dapat dipendekkan tanpa login.');
+  }
+  const claim = randomToken();
+  const l = await db().begin(async (t) => {
+    const slug = await generateSlug(t);
+    const [row] = await t`insert into links ${t({ workspaceId: PUBLIC_WS_ID, slug, title: ('Publik: ' + hostOf(a.url)).slice(0, 120), destination: a.url,
+      riskScore: a.score, riskFlags: a.flags as never, interstitial: 'auto', claimHash: sha256Hex(claim) } as never)} returning *`;
+    await t`insert into link_versions ${t({ linkId: row.id, workspaceId: PUBLIC_WS_ID, field: 'dibuat', oldValue: '', newValue: row.destination, source: 'publik' } as never)}`;
+    await audit({ workspaceId: PUBLIC_WS_ID, ipHash }, 'link.create', 'Link', row.id, null, { slug: row.slug, host: hostOf(row.destination) }, 'publik', t);
+    return row;
+  });
+  return { link: { slug: l.slug, shortUrl: shortUrlOf(l.slug), destination: l.destination, createdAt: l.createdAt }, claim };
+}
+
+/** Memindahkan shortlink anonim (dengan claim token yang valid) ke ruang kerja pengguna yang sedang login. */
+export async function claimLinks(p: any, u: Ctx) {
+  const tokens: string[] = (Array.isArray(p.claims) ? p.claims : []).filter((x: unknown) => typeof x === 'string' && /^[a-f0-9]{64}$/.test(x)).slice(0, 50);
+  if (!tokens.length) return { claimed: 0 };
+  const plan = PLAN_LIMITS[u.plan] || PLAN_LIMITS.free;
+  const claimed = await db().begin(async (t) => {
+    const [c] = await t`select count(*)::int as n from links where workspace_id = ${u.workspaceId} and status <> 'dihapus'`;
+    const room = Math.max(0, plan.links - c.n);
+    if (!room) return [];
+    const rows = await t`update links set workspace_id = ${u.workspaceId}, owner_id = ${u.userId}, created_by = ${u.userId}, updated_by = ${u.userId}, claim_hash = null,
+        title = ${'Shortlink'} || ' ' || slug
+      where id in (select id from links where workspace_id = ${PUBLIC_WS_ID} and claim_hash = any(${tokens.map((x) => sha256Hex(x))}) and status <> 'dihapus' limit ${room})
+      returning id, slug`;
+    if (rows.length) await t`update click_events set workspace_id = ${u.workspaceId} where link_id = any(${rows.map((r: any) => r.id)})`;
+    for (const r of rows) await audit(u, 'link.claim', 'Link', r.id, null, { slug: r.slug }, 'ui', t);
+    return rows;
+  });
+  claimed.forEach((r: any) => invalidateLinkCache(r.slug));
+  return { claimed: claimed.length, slugs: claimed.map((r: any) => r.slug) };
 }

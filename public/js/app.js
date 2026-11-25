@@ -6,7 +6,7 @@ const NAV = [
   { group: 'Utama', items: [['dashboard', 'Dasbor', 'home', ROLE_ALL], ['links', 'Shortlink', 'link', ROLE_ALL], ['qr', 'QR & Barcode', 'qr', ROLE_ALL],
     ['docs', 'E-Signature', 'sign', ROLE_ALL], ['scanner', 'Scanner', 'scan', ROLE_ALL], ['analytics', 'Analitik', 'chart', ROLE_ALL]] },
   { group: 'Kelola', items: [['team', 'Tim & Anggota', 'team', ['admin']], ['security', 'Keamanan Akun', 'shield', ROLE_ALL],
-    ['audit', 'Log Audit', 'log', ['admin', 'auditor']], ['settings', 'Pengaturan', 'gear', ['admin']]] }
+    ['audit', 'Log Audit', 'log', ['admin', 'auditor']], ['billing', 'Paket & Tagihan', 'check', ROLE_ALL], ['settings', 'Pengaturan', 'gear', ['admin']]] }
 ];
 const can = {
   edit: () => State.me && ['admin', 'editor'].indexOf(State.me.role) >= 0,
@@ -24,7 +24,7 @@ const App = {
     document.addEventListener('click', App.onClick);
     if ((BOOT.mode || 'app') === 'app') {
       clear($('#app')).appendChild(h('div', { class: 'auth-wrap' }, skeleton(3)));
-      try { const r = await rawApi('auth.me', {}); State.token = 'cookie'; State.me = r.me; }
+      try { const r = await rawApi('auth.me', {}); State.token = 'cookie'; State.me = r.me; Home.claimAfterLogin(); }
       catch (e) { if (e.code === 'MFA_REQUIRED') { State.authView = 'mfa'; State.mfaTicket = 'session'; } }
     }
     App.render();
@@ -49,7 +49,7 @@ const App = {
     const root = clear($('#app'));
     const mode = BOOT.mode || 'app';
     if (mode !== 'app' && PublicPages[mode] && !State.publicDone) return PublicPages[mode](root);
-    if (!State.token) return Auth.screen(root, State.authView || 'login');
+    if (!State.token) return Auth.screen(root, State.authView || 'home');
     if (State.me.mustChangePassword) return Auth.forceChangePassword(root);
     if (State.me.mfaSetupRequired) return Auth.forceMfa(root);
     App.shell(root);
@@ -103,7 +103,7 @@ const Actions = {
   toggleTheme() { State.theme = State.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = State.theme; },
   async logout(btn) {
     await withBusy(btn, async () => { try { await callApi('auth.logout', {}, { noRedirect: true }); } catch (e) { /* tetap keluar */ } });
-    State.token = null; State.me = null; State.authView = 'login';
+    State.token = null; State.me = null; State.authView = 'home';
     toast('Anda telah keluar.', 'ok'); App.render();
   },
   async switchWs(sel) {
@@ -124,13 +124,15 @@ const Auth = {
   frame(root, title, sub, body, foot) {
     root.appendChild(h('div', { class: 'auth-wrap' }, h('div', { class: 'card auth-card' },
       h('div', { class: 'brand' }, h('span', { class: 'brand-logo' }, icon('shield', 20)), BOOT.appName),
-      h('h1', { style: 'text-align:center;font-size:1.25rem', text: title }), sub ? h('p', { class: 'muted', style: 'text-align:center', text: sub }) : null, body, foot || null)));
+      h('h1', { style: 'text-align:center;font-size:1.25rem', text: title }), sub ? h('p', { class: 'muted', style: 'text-align:center', text: sub }) : null, body, foot || null,
+      h('p', { style: 'text-align:center;margin-top:14px' }, h('button', { class: 'btn ghost sm', type: 'button', onclick: () => Auth.setView('home') }, '← Kembali ke beranda')))));
   },
   screen(root, view) {
     if (view === 'register') return Auth.register(root);
     if (view === 'forgot') return Auth.forgot(root);
     if (view === 'mfa') return Auth.mfa(root);
-    return Auth.login(root);
+    if (view === 'login') return Auth.login(root);
+    return Home.render(root);
   },
   setView(v) { State.authView = v; App.render(); },
   login(root) {
@@ -188,6 +190,7 @@ const Auth = {
       State.pendingInvite = null;
     }
     toast('Selamat datang, ' + State.me.nama + '.', 'ok');
+    await Home.claimAfterLogin();
     if (!location.hash) location.hash = '#/dashboard';
     App.render();
   },

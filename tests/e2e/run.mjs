@@ -10,6 +10,8 @@ const MAILPIT = process.env.MAILPIT || 'http://127.0.0.1:54324';
 const SB_URL = process.env.SB_URL || 'http://127.0.0.1:54321';
 const SB_KEY = process.env.SB_KEY || 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH';
 const CRON = process.env.CRON_SECRET || 'cron-local-secret';
+const MOCK = process.env.MAYAR_MOCK || 'http://127.0.0.1:4010';
+const WH = process.env.MAYAR_WEBHOOK_TOKEN || 'whtok-local';
 const DB_CONTAINER = process.env.DB_CONTAINER || 'supabase_db_smartsign';
 const RUN = randomBytes(3).toString('hex');
 
@@ -141,7 +143,7 @@ await test('Halaman SPA tersaji dengan CSP tanpa skrip inline', async () => {
   }
 });
 await test('Aset statis vendor dan JS dapat dimuat', async () => {
-  for (const p of ['/js/core.js', '/js/app.js', '/js/pages.js', '/js/public.js', '/js/codes.js', '/js/go.js', '/css/app.css', '/vendor/pdf.min.mjs', '/vendor/pdf.worker.min.mjs', '/vendor/pdf-lib.min.js', '/vendor/qrcode.js', '/vendor/jsQR.js', '/icon.svg'])
+  for (const p of ['/js/core.js', '/js/app.js', '/js/pages.js', '/js/public.js', '/js/codes.js', '/js/billing.js', '/js/go.js', '/css/app.css', '/vendor/pdf.min.mjs', '/vendor/pdf.worker.min.mjs', '/vendor/pdf-lib.min.js', '/vendor/qrcode.js', '/vendor/jsQR.js', '/icon.svg'])
     assert((await anon.get(p)).status === 200, p + ' tidak tersedia');
 });
 await test('CSRF: tanpa header khusus atau dari origin lain ditolak', async () => {
@@ -305,6 +307,84 @@ await test('Laporan penyalahgunaan publik masuk ke antrean admin', async () => {
   await anon.api('public.report', { slug: link.slug, reason: 'phishing', detail: 'uji' });
   const l = await alice.api('abuse.list', {});
   assert((l.rows || l).some((x) => x.slug === link.slug), 'laporan tidak tampil');
+});
+
+
+/* ---------- Shortlink publik tanpa login ---------- */
+let anon1 = null;
+await test('Shortlink publik tanpa login: buat, redirect 302, tujuan berbahaya ditolak', async () => {
+  const r = await anon.api('public.shorten', { destination: 'https://example.com/publik-' + RUN });
+  assert(r.link && /^[a-f0-9]{64}$/.test(r.claim || ''), 'tidak ada claim token');
+  anon1 = r;
+  const res = await anon.get('/' + r.link.slug);
+  assert(res.status === 302 && res.headers.get('location') === 'https://example.com/publik-' + RUN, 'redirect: ' + res.headers.get('location'));
+  await anon.fail('public.shorten', { destination: 'http://127.0.0.1/admin' }, 'VALIDATION');
+  await anon.fail('public.shorten', { destination: 'javascript:alert(1)' }, 'VALIDATION');
+  assert((await anon.api('public.shorten', { destination: 'https://example.com', website: 'spam' })).link === null, 'honeypot lolos');
+  assert(psql(`select w.id from links l join workspaces w on w.id = l.workspace_id where l.slug = '${r.link.slug}'`) === '00000000-0000-0000-0000-000000000001', 'bukan di ruang kerja publik');
+});
+await test('Shortlink publik: dibatasi 10 per jam per IP', async () => {
+  const ip = { 'x-forwarded-for': '203.0.113.' + (Number.parseInt(RUN.slice(0, 2), 16) % 250 + 1) };
+  let limited = 0;
+  for (let i = 0; i < 11; i++) { const r = await anon.raw('public.shorten', { destination: 'https://example.org/batas-' + i }, ip); if (!r.ok && r.code === 'RATE_LIMIT') limited++; }
+  assert(limited === 1, 'percobaan ke-11 harus ditolak (ditolak: ' + limited + ')');
+});
+await test('Klaim shortlink publik setelah login, lalu ganti slug (slug lama tidak bisa dipakai ulang)', async () => {
+  const c = await alice.api('link.claim', { claims: [anon1.claim, 'f'.repeat(64)] });
+  assert(c.claimed === 1, 'jumlah diklaim ' + c.claimed);
+  assert((await alice.api('link.claim', { claims: [anon1.claim] })).claimed === 0, 'bisa diklaim dua kali');
+  await carol.fail('link.get', { id: psql(`select id from links where slug = '${anon1.link.slug}'`) }, 'UNAUTHORIZED');
+  const id = psql(`select id from links where slug = '${anon1.link.slug}'`);
+  const g = await alice.api('link.get', { id });
+  assert(g.link.slug === anon1.link.slug, 'tidak bisa dibaca pemilik baru');
+  const newSlug = 'klaim-' + RUN;
+  let up = await alice.raw('link.update', { id, slug: newSlug });
+  if (!up.ok && up.code === 'REAUTH_REQUIRED') { await alice.api('auth.reauth', { password: PW, code: await freshTotp(secret) }); up = await alice.raw('link.update', { id, slug: newSlug }); }
+  assert(up.ok, 'ganti slug: ' + up.message);
+  assert(((await anon.get('/' + newSlug)).headers.get('location') || '').startsWith('https://example.com/publik-'), 'slug baru tidak jalan');
+  assert((await anon.get('/' + anon1.link.slug)).headers.get('location') === '/go/' + anon1.link.slug, 'slug lama masih mengarah');
+  const re = await alice.raw('link.create', { destination: 'https://example.com', title: 'Ambil slug lama', slug: anon1.link.slug });
+  assert(!re.ok, 'slug lama bisa dipakai ulang');
+});
+
+/* ---------- Paket & pembayaran Mayar ---------- */
+let payId = '';
+await test('Harga paket & paket gratis: e-signature terkunci (PAYMENT_REQUIRED)', async () => {
+  const p = await anon.api('public.plans');
+  assert(p.plans.map((x) => x.price).join(',') === '0,50000,100000', 'harga: ' + p.plans.map((x) => x.price));
+  const me = (await alice.api('auth.me')).me;
+  assert(me.plan === 'free' && me.esignEnabled === false, 'paket awal ' + me.plan);
+  await alice.fail('doc.uploadUrl', { fileName: 'a.pdf', size: 1000 }, 'PAYMENT_REQUIRED');
+});
+await test('Checkout Mayar: validasi, tagihan tidak ganda, webhook palsu tidak mengaktifkan paket', async () => {
+  await alice.fail('billing.checkout', { plan: 'pro', mobile: '123' }, 'VALIDATION');
+  await alice.fail('billing.checkout', { plan: 'emas', mobile: '081234567890' }, 'VALIDATION');
+  const r = await alice.api('billing.checkout', { plan: 'pro', mobile: '0812-3456-7890' });
+  assert(/^https:\/\/mock\.mayar\.local\/pay\//.test(r.payUrl), 'payUrl ' + r.payUrl);
+  payId = r.id;
+  const again = await alice.api('billing.checkout', { plan: 'pro', mobile: '081234567890' });
+  assert(again.id === payId && again.reused, 'tagihan ganda dibuat');
+  assert((await alice.api('billing.check', { id: payId })).status === 'pending', 'belum bayar dianggap lunas');
+  const fake = await fetch(BASE + '/api/webhooks/mayar?token=' + WH, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ event: 'payment.received', data: { customerEmail: emails.alice, amount: 50000, status: true } }) });
+  assert(fake.ok, 'webhook status ' + fake.status);
+  assert((await alice.api('auth.me')).me.plan === 'free', 'webhook palsu mengaktifkan paket');
+  assert((await fetch(BASE + '/api/webhooks/mayar?token=salah', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status === 401, 'token webhook salah diterima');
+  await carol.fail('billing.check', { id: payId }, 'UNAUTHORIZED');
+});
+await test('Bayar Pro 3 bulan: paket aktif 90 hari dan e-signature terbuka', async () => {
+  const last = await (await fetch(MOCK + '/__last')).json();
+  await fetch(MOCK + '/__pay/' + last.id, { method: 'POST' });
+  const ck = await alice.api('billing.check', { id: payId });
+  assert(ck.status === 'paid', 'status ' + ck.status);
+  const me = (await alice.api('auth.me')).me;
+  assert(me.plan === 'pro' && me.esignEnabled, 'paket tidak aktif: ' + me.plan);
+  const days = (Date.parse(me.planExpiresAt) - Date.now()) / 86400000;
+  assert(days > 89.9 && days <= 90.01, 'masa aktif ' + days.toFixed(2) + ' hari');
+  assert((await alice.api('billing.check', { id: payId })).status === 'paid', 'tidak idempoten');
+  const b = await alice.api('billing.get');
+  assert(b.payments[0].status === 'paid' && b.current.plan === 'pro', 'riwayat pembayaran');
+  assert(psql(`select count(*) from audit_log where action = 'billing.paid' and entity_id = '${payId}'`) === '1', 'aktivasi tercatat lebih dari sekali');
 });
 
 /* ---------- Tanda tangan ---------- */
@@ -479,6 +559,74 @@ await test('Supabase REST langsung (anon key) tidak bisa membaca tabel', async (
   }
   const s = await fetch(SB_URL + '/storage/v1/object/documents/ws/' + 'x', { headers: { apikey: SB_KEY } });
   assert(s.status >= 400, 'storage terbaca anonim');
+});
+
+
+await test('Webhook Mayar mengaktifkan Lifetime setelah verifikasi ulang ke API', async () => {
+  await carol.fail('doc.uploadUrl', { fileName: 'a.pdf', size: 1000 }, 'PAYMENT_REQUIRED');
+  await carol.api('billing.checkout', { plan: 'lifetime', mobile: '+6281234567890' });
+  const last = await (await fetch(MOCK + '/__last')).json();
+  await fetch(MOCK + '/__pay/' + last.id, { method: 'POST' });
+  const wh = await fetch(BASE + '/api/webhooks/mayar?token=' + WH, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ event: 'payment.received', data: { id: last.id, customerEmail: emails.carol, amount: 100000 } }) });
+  const j = await wh.json();
+  assert(j.results && j.results.includes('paid'), 'webhook: ' + JSON.stringify(j));
+  const me = (await carol.api('auth.me')).me;
+  assert(me.plan === 'lifetime' && me.planExpiresAt === null && me.esignEnabled, 'lifetime tidak aktif');
+  await carol.fail('billing.checkout', { plan: 'pro', mobile: '081234567890' }, 'CONFLICT');
+});
+await test('Hak akses: viewer/editor tidak bisa membeli paket, non-superadmin tidak bisa ke panel platform', async () => {
+  await bob.api('auth.login', { email: emails.bob, password: PW }); // sesi bob dicabut saat perannya diubah
+  await bob.fail('billing.checkout', { plan: 'pro', mobile: '081234567890' }, 'FORBIDDEN');
+  await bob.fail('platform.users', {}, 'FORBIDDEN');
+  await carol.fail('platform.users', {}, 'FORBIDDEN');
+  await carol.fail('platform.resetPassword', { userId: psql(`select id from profiles where email = '${emails.alice}'`), mode: 'temp' }, 'FORBIDDEN');
+});
+let bobId = '';
+await test('Superadmin: password sementara (wajib reauth), sesi lama dicabut, wajib ganti saat login', async () => {
+  const u = await alice.api('platform.users', { q: emails.bob });
+  const b = u.rows.find((x) => x.email === emails.bob);
+  assert(b, 'bob tidak ada di daftar'); bobId = b.id;
+  psql('delete from reauth');
+  const r0 = await alice.raw('platform.resetPassword', { userId: b.id, mode: 'temp' });
+  assert(!r0.ok && r0.code === 'REAUTH_REQUIRED', 'tanpa konfirmasi: ' + r0.code);
+  await alice.api('auth.reauth', { password: PW, code: await freshTotp(secret) });
+  const r = await alice.api('platform.resetPassword', { userId: b.id, mode: 'temp' });
+  assert(r.tempPassword && r.tempPassword.length >= 14, 'password sementara');
+  await bob.fail('auth.me', {}, 'UNAUTHORIZED');
+  const old = await bob.raw('auth.login', { email: emails.bob, password: PW });
+  assert(!old.ok, 'password lama masih berlaku');
+  const d = await bob.api('auth.login', { email: emails.bob, password: r.tempPassword });
+  assert(d.me.mustChangePassword === true, 'tidak wajib ganti');
+  await bob.fail('link.list', {}, 'PASSWORD_CHANGE_REQUIRED');
+  await bob.api('auth.changePassword', { oldPassword: r.tempPassword, newPassword: 'Cemara-Hijau-2027' });
+  assert((await bob.api('link.list', {})).total >= 0, 'tetap terkunci setelah ganti');
+  assert((await bob.api('auth.me')).me.mustChangePassword === false, 'flag tidak hilang');
+});
+await test('Superadmin: nonaktifkan akun memblokir sesi & login; tidak bisa menonaktifkan diri sendiri', async () => {
+  const carolId = psql(`select id from profiles where email = '${emails.carol}'`);
+  const aliceId = psql(`select id from profiles where email = '${emails.alice}'`);
+  await alice.api('platform.user', { userId: carolId, status: 'nonaktif' });
+  await carol.fail('auth.me', {}, 'UNAUTHORIZED');
+  const l = await new Client().raw('auth.login', { email: emails.carol, password: PW });
+  assert(!l.ok, 'akun nonaktif bisa login');
+  await alice.fail('platform.user', { userId: aliceId, status: 'nonaktif' }, 'CONFLICT');
+  await alice.api('platform.user', { userId: carolId, status: 'aktif' });
+  const ok = await carol.api('auth.login', { email: emails.carol, password: PW });
+  assert(ok.mfaRequired || ok.me, 'aktif kembali tetapi tidak bisa login');
+});
+await test('Superadmin: reset MFA dan beri akses e-sign manual pada paket gratis', async () => {
+  const carolId = psql(`select id from profiles where email = '${emails.carol}'`);
+  const r = await alice.api('platform.resetMfa', { userId: carolId });
+  assert(/faktor dihapus/.test(r.message), r.message);
+  assert(psql(`select count(*) from auth.mfa_factors where user_id = '${carolId}'`) === '0', 'faktor masih ada');
+  const bws = psql(`select w.id from workspaces w join memberships m on m.workspace_id = w.id where m.user_id = '${bobId}' and m.role = 'admin' limit 1`);
+  if (bws) {
+    await alice.api('platform.workspace', { workspaceId: bws, esign: 'on' });
+    assert(psql(`select esign_override from workspaces where id = '${bws}'`) === 't', 'override tidak tersimpan');
+  }
+  const p = await alice.api('platform.get', {});
+  assert(p.workspaces.some((w) => w.system), 'ruang kerja sistem tidak tampil');
 });
 
 /* ---------- Audit ---------- */

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { headers } from 'next/headers';
 import { db, type Q } from './db';
-import { APP, DEFAULT_PLATFORM, DEFAULT_WS_SETTINGS, ENV, ROLES, type PlatformSettings, type WsSettings } from './config';
+import { APP, DEFAULT_PLATFORM, DEFAULT_WS_SETTINGS, ENV, PLAN_LIMITS, ROLES, type PlatformSettings, type WsSettings } from './config';
 import { AppError } from './errors';
 import { hmacHex, ms, str, todayWib } from './util';
 
@@ -14,6 +14,8 @@ export type Ctx = ReqInfo & {
   workspaceId: string;
   workspaceName: string;
   plan: string;
+  planExpiresAt: string | null;
+  esignEnabled: boolean;
   settings: WsSettings;
   role: string;
   platformRole: 'user' | 'superadmin';
@@ -81,17 +83,21 @@ export async function requireSession(sb: SupabaseClient, info: ReqInfo, opts: { 
   const claims = await currentClaims(sb);
   if (!claims) throw new AppError('UNAUTHORIZED', 'Silakan masuk terlebih dahulu.');
   const userId = claims.sub;
+  if (claims.session_id) {
+    const [act] = await db()`select public.session_active(${userId}::uuid, ${claims.session_id}::uuid) as ok`;
+    if (!act?.ok) throw new AppError('UNAUTHORIZED', 'Sesi Anda telah berakhir atau dicabut. Silakan masuk kembali.');
+  }
   // AAL dari JWT yang sudah diverifikasi; status MFA dari database (bukan dari cookie yang bisa basi).
   const aal = String(claims.aal || 'aal1');
   const mfaEnabled = (await db()`select 1 from public.mfa_enabled_users(${[userId]}::uuid[])`).length > 0;
   if (mfaEnabled && aal !== 'aal2' && !opts.allowAal1) throw new AppError('MFA_REQUIRED', 'Masukkan kode autentikator untuk melanjutkan.');
 
   const sql = db();
-  let [p] = await sql`select id, email, nama, platform_role, status, last_workspace_id from profiles where id = ${userId}`;
+  let [p] = await sql`select id, email, nama, platform_role, status, last_workspace_id, must_change_password from profiles where id = ${userId}`;
   if (!p) {
     // profil seharusnya dibuat trigger; buat ulang bila belum ada
     await sql`insert into profiles (id, email, nama) values (${userId}, ${String(claims.email || '').toLowerCase()}, ${String(claims.email || '').split('@')[0]}) on conflict do nothing`;
-    [p] = await sql`select id, email, nama, platform_role, status, last_workspace_id from profiles where id = ${userId}`;
+    [p] = await sql`select id, email, nama, platform_role, status, last_workspace_id, must_change_password from profiles where id = ${userId}`;
   }
   if (p.status !== 'aktif') throw new AppError('UNAUTHORIZED', 'Akun dinonaktifkan. Hubungi admin.');
   if (ENV.superadminEmails.includes(p.email) && p.platformRole !== 'superadmin') {
@@ -100,11 +106,12 @@ export async function requireSession(sb: SupabaseClient, info: ReqInfo, opts: { 
   }
   await ensureWorkspace(userId, p.nama);
   const mems = await sql`
-    select m.workspace_id, m.role, w.nama, w.settings, w.plan from memberships m join workspaces w on w.id = m.workspace_id
+    select m.workspace_id, m.role, w.nama, w.settings, w.plan, w.plan_expires_at, w.esign_override from memberships m join workspaces w on w.id = m.workspace_id
     where m.user_id = ${userId} and m.status = 'aktif' and w.status = 'aktif' order by m.created_at`;
   if (!mems.length) throw new AppError('FORBIDDEN', 'Akun Anda belum tergabung di ruang kerja aktif.');
   const cur = mems.find((m) => m.workspaceId === p.lastWorkspaceId) || mems[0];
   const settings = wsSettings(cur.settings);
+  const plan = effectivePlan(cur.plan, cur.planExpiresAt);
   return {
     ...info,
     sb,
@@ -113,24 +120,33 @@ export async function requireSession(sb: SupabaseClient, info: ReqInfo, opts: { 
     nama: p.nama,
     workspaceId: cur.workspaceId,
     workspaceName: cur.nama,
-    plan: cur.plan,
+    plan,
+    planExpiresAt: plan === 'pro' ? cur.planExpiresAt : null,
+    esignEnabled: cur.esignOverride == null ? !!PLAN_LIMITS[plan]?.esign : !!cur.esignOverride,
     settings,
     role: cur.role,
     platformRole: p.platformRole === 'superadmin' ? 'superadmin' : 'user',
     mfaEnabled,
     mfaSetupRequired: cur.role === 'admin' && settings.requireMfaAdmin && !mfaEnabled,
-    mustChangePassword: false,
+    mustChangePassword: !!p.mustChangePassword,
     sessionId: claims.session_id || '',
     aal,
     workspaces: mems.map((m) => ({ workspaceId: m.workspaceId, nama: m.nama, role: m.role }))
   };
 }
 
+/** Paket efektif: paket 'pro' yang sudah lewat masa aktifnya dianggap 'free'. */
+export function effectivePlan(plan: string, expiresAt: string | null | undefined): string {
+  if (plan === 'pro' && (!expiresAt || Date.parse(expiresAt) <= Date.now())) return 'free';
+  return PLAN_LIMITS[plan] ? plan : 'free';
+}
+
 export function me(u: Ctx) {
   return {
     userId: u.userId, email: u.email, nama: u.nama, role: u.role, roleLabel: ROLES[u.role] || u.role, platformRole: u.platformRole,
     workspaceId: u.workspaceId, workspaceName: u.workspaceName, workspaces: u.workspaces, mfaEnabled: u.mfaEnabled,
-    mfaSetupRequired: u.mfaSetupRequired, mustChangePassword: u.mustChangePassword
+    mfaSetupRequired: u.mfaSetupRequired, mustChangePassword: u.mustChangePassword,
+    plan: u.plan, planLabel: PLAN_LIMITS[u.plan]?.label || u.plan, planExpiresAt: u.planExpiresAt, esignEnabled: u.esignEnabled
   };
 }
 

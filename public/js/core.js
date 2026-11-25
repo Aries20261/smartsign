@@ -397,6 +397,7 @@ function hbars(items, total) {
     h('span', { class: 'small', text: fmtN.format(i.count) + (total ? ' (' + Math.round(i.count / total * 100) + '%)' : '') }))));
 }
 function pager(pg, onPage) {
+  pg = Object.assign({}, pg, { pages: pg.pages || Math.max(1, Math.ceil((pg.total || 0) / (pg.pageSize || 20))) });
   return h('div', { class: 'pager' }, h('span', { class: 'muted small' }, 'Menampilkan ' + (pg.rows.length ? ((pg.page - 1) * pg.pageSize + 1) : 0) + '–' + ((pg.page - 1) * pg.pageSize + pg.rows.length) + ' dari ' + num(pg.total)),
     h('div', { class: 'row' }, h('button', { class: 'btn sm', disabled: pg.page <= 1 ? true : null, onclick: () => onPage(pg.page - 1) }, '‹ Sebelumnya'),
       h('span', { class: 'small' }, 'Hal. ' + pg.page + '/' + pg.pages),

@@ -1,13 +1,15 @@
 import { db } from '../db';
-import { APP, ENV, PLAN_LIMITS, ROLES, ALL_ROLES, shortBase } from '../config';
+import { APP, ENV, PLAN_LIMITS, PUBLIC_WS_ID, ROLES, ALL_ROLES, shortBase } from '../config';
 import { AppError, vErr } from '../errors';
 import { audit, securityEvent } from '../audit';
-import { rateLimit } from '../ratelimit';
+import { rateLimit, rateReset } from '../ratelimit';
 import { sendMail } from '../mail';
-import { invalidatePlatformMemo, me, platformSettings, requireReauth, requireSession, type Ctx } from '../session';
-import { addSecIso, bool, int, isEmail, maskEmail, normEmail, paginate, randomToken, sha256Hex, str } from '../util';
+import { effectivePlan, invalidatePlatformMemo, me, platformSettings, requireReauth, requireSession, type Ctx } from '../session';
+import { randomSlug, addSecIso, bool, int, isEmail, maskEmail, normEmail, paginate, randomToken, sha256Hex, str } from '../util';
 import { invalidateLinkCache, linkStats } from './links';
 import { expireDocuments, OPEN_STATUSES } from './docs';
+import { reconcilePayments } from './billing';
+import { adminClient, statelessClient } from '../supabase';
 
 /* ---------- Dasbor ---------- */
 export async function dashboard(_p: any, u: Ctx) {
@@ -259,12 +261,112 @@ export async function handleAbuse(p: any, u: Ctx) {
 /* ---------- Platform (superadmin) ---------- */
 export async function getPlatform(_p: any, _u: Ctx) {
   const s = await platformSettings(true);
-  const ws = await db()`select w.id, w.nama, w.plan, w.status, w.created_at,
+  const ws = await db()`select w.id, w.nama, w.plan, w.plan_expires_at, w.esign_override, w.status, w.created_at, pr.email as owner_email,
       (select count(*) from memberships m where m.workspace_id = w.id and m.status = 'aktif')::int as members,
       (select count(*) from links l where l.workspace_id = w.id and l.status <> 'dihapus')::int as links
-    from workspaces w where w.status <> 'dihapus' order by w.created_at desc limit 500`;
-  return { ...s, shortDomain: ENV.shortDomain, safeBrowsing: !!ENV.safeBrowsingKey, smtp: !!ENV.smtpUrl,
-    workspaces: ws.map((w) => ({ id: w.id, nama: w.nama, plan: w.plan, status: w.status, createdAt: w.createdAt, members: w.members, links: w.links })) };
+    from workspaces w left join profiles pr on pr.id = w.owner_id where w.status <> 'dihapus' order by w.created_at desc limit 500`;
+  return { ...s, shortDomain: ENV.shortDomain, safeBrowsing: !!ENV.safeBrowsingKey, smtp: !!ENV.smtpUrl, mayar: !!ENV.mayarApiKey,
+    webhookUrl: ENV.appUrl + '/api/webhooks/mayar' + (ENV.mayarWebhookToken ? '?token=…' : ''),
+    workspaces: ws.map((w) => {
+      const eff = effectivePlan(w.plan, w.planExpiresAt);
+      return { id: w.id, nama: w.nama, plan: eff, planLabel: PLAN_LIMITS[eff].label, planExpiresAt: eff === 'pro' ? w.planExpiresAt : null,
+        esign: w.esignOverride == null ? 'auto' : w.esignOverride ? 'on' : 'off', esignEnabled: w.esignOverride == null ? PLAN_LIMITS[eff].esign : !!w.esignOverride,
+        status: w.status, createdAt: w.createdAt, members: w.members, links: w.links, owner: w.ownerEmail || '', system: w.id === PUBLIC_WS_ID };
+    }) };
+}
+
+/* ---------- Superadmin: kelola pengguna, akses, dan reset password ---------- */
+export async function platformUsers(p: any) {
+  const { page, pageSize, offset } = paginate(p);
+  const q = str(p.q, 80).toLowerCase();
+  const sql = db();
+  const where = q ? sql`where lower(pr.email || ' ' || pr.nama) like ${'%' + q.replace(/[%_\\]/g, '') + '%'}` : sql``;
+  const [c] = await sql`select count(*)::int as n from profiles pr ${where}`;
+  const rows = await sql`select pr.id, pr.email, pr.nama, pr.status, pr.platform_role, pr.last_login_at, pr.created_at, pr.must_change_password,
+      u.email_confirmed_at, w.id as ws_id, w.nama as ws_nama, w.plan, w.plan_expires_at, w.esign_override
+    from profiles pr left join auth.users u on u.id = pr.id
+    left join lateral (select w.* from memberships m join workspaces w on w.id = m.workspace_id where m.user_id = pr.id and m.role = 'admin' and m.status = 'aktif' order by m.created_at limit 1) w on true
+    ${where} order by pr.created_at desc limit ${pageSize} offset ${offset}`;
+  const mfa = new Set((await sql`select * from public.mfa_enabled_users(${rows.map((r) => r.id)}::uuid[])`).map((r: any) => r.mfaEnabledUsers));
+  return { total: c.n, page, pageSize, rows: rows.map((r) => {
+    const eff = r.wsId ? effectivePlan(r.plan, r.planExpiresAt) : 'free';
+    return { id: r.id, email: r.email, nama: r.nama, status: r.status, platformRole: r.platformRole, lastLoginAt: r.lastLoginAt || '', createdAt: r.createdAt,
+      emailConfirmed: !!r.emailConfirmedAt, mfaEnabled: mfa.has(r.id), mustChangePassword: r.mustChangePassword,
+      workspaceId: r.wsId || '', workspaceName: r.wsNama || '', plan: eff, planLabel: PLAN_LIMITS[eff].label, planExpiresAt: eff === 'pro' ? r.planExpiresAt : null,
+      esignEnabled: r.wsId ? (r.esignOverride == null ? PLAN_LIMITS[eff].esign : !!r.esignOverride) : false };
+  }) };
+}
+async function targetUser(id: unknown) {
+  const [t] = await db()`select id, email, nama, status, platform_role from profiles where id = ${str(id, 40)}`;
+  if (!t) throw new AppError('NOT_FOUND', 'Pengguna tidak ditemukan.');
+  return t;
+}
+export async function platformUserUpdate(p: any, u: Ctx) {
+  await requireReauth(u);
+  const t = await targetUser(p.userId);
+  const patch: Record<string, string> = {};
+  if (p.status) {
+    if (!['aktif', 'nonaktif'].includes(p.status)) throw vErr('status', 'Status tidak dikenal.');
+    if (t.id === u.userId && p.status !== 'aktif') throw new AppError('CONFLICT', 'Anda tidak dapat menonaktifkan akun sendiri.');
+    patch.status = p.status;
+  }
+  if (p.platformRole) {
+    if (!['user', 'superadmin'].includes(p.platformRole)) throw vErr('platformRole', 'Peran tidak dikenal.');
+    if (t.id === u.userId && p.platformRole !== 'superadmin') throw new AppError('CONFLICT', 'Anda tidak dapat mencabut peran superadmin sendiri.');
+    if (p.platformRole !== 'superadmin' && ENV.superadminEmails.includes(String(t.email).toLowerCase()))
+      throw new AppError('CONFLICT', 'Email ini tercantum di SUPERADMIN_EMAILS; hapus dari variabel tersebut terlebih dahulu.');
+    patch.platformRole = p.platformRole;
+  }
+  if (Object.keys(patch).length) await db()`update profiles set ${db()(patch as never)} where id = ${t.id}`;
+  if (patch.status === 'nonaktif') await db()`select revoke_user_sessions(${t.id}, null, null)`;
+  await audit(u, 'platform.user', 'User', t.id, { status: t.status, peran: t.platformRole }, patch);
+  await securityEvent('akses_pengguna_diubah', 'sedang', u, maskEmail(t.email), patch);
+  return { ok: true };
+}
+/** Password sementara: 4 kelompok acak, mudah didikte, memenuhi aturan huruf + angka. */
+function tempPassword() { return [randomSlug(4), randomSlug(4), randomSlug(4)].join('-') + '-' + (10 + Math.floor(Math.random() * 89)); }
+export async function platformResetPassword(p: any, u: Ctx) {
+  await requireReauth(u);
+  const t = await targetUser(p.userId);
+  await rateLimit('preset:' + t.id, 10, 3600, 'Terlalu banyak reset untuk pengguna ini. Coba lagi nanti.');
+  if (p.mode === 'link') {
+    const { error } = await statelessClient().auth.resetPasswordForEmail(t.email, { redirectTo: ENV.appUrl + '/auth/confirm' });
+    if (error) throw new AppError('BUSY', 'Gagal mengirim email reset: ' + (/rate/i.test(error.message) ? 'batas pengiriman email tercapai, coba lagi nanti atau gunakan password sementara.' : 'coba lagi nanti.'));
+    await audit(u, 'platform.resetPassword', 'User', t.id, null, { cara: 'tautan email' });
+    return { message: 'Tautan reset password dikirim ke ' + maskEmail(t.email) + '.' };
+  }
+  let pw = tempPassword();
+  while (!/\d/.test(pw) || !/[A-Za-z]/.test(pw)) pw = tempPassword();
+  const { error } = await adminClient().auth.admin.updateUserById(t.id, { password: pw });
+  if (error) throw new AppError('BUSY', 'Gagal mengatur password sementara. Coba lagi.');
+  await db()`update profiles set must_change_password = true where id = ${t.id}`;
+  await db()`select revoke_user_sessions(${t.id}, null, null)`;
+  await rateReset('lf:' + String(t.email).toLowerCase()).catch(() => {});
+  await audit(u, 'platform.resetPassword', 'User', t.id, null, { cara: 'password sementara', wajibGanti: true });
+  await securityEvent('password_direset_admin', 'sedang', u, maskEmail(t.email));
+  return { tempPassword: pw, message: 'Berikan password sementara ini ke ' + t.email + ' melalui saluran aman. Pengguna wajib menggantinya saat login.' };
+}
+export async function platformResetMfa(p: any, u: Ctx) {
+  await requireReauth(u);
+  const t = await targetUser(p.userId);
+  const { data } = await adminClient().auth.admin.mfa.listFactors({ userId: t.id });
+  const factors = data?.factors || [];
+  for (const f of factors) await adminClient().auth.admin.mfa.deleteFactor({ id: f.id, userId: t.id });
+  await db()`delete from recovery_codes where user_id = ${t.id}`.catch(() => {});
+  await db()`select revoke_user_sessions(${t.id}, null, null)`;
+  await audit(u, 'platform.resetMfa', 'User', t.id, null, { faktorDihapus: factors.length });
+  await securityEvent('mfa_direset_admin', 'tinggi', u, maskEmail(t.email));
+  return { message: 'MFA ' + maskEmail(t.email) + ' direset (' + factors.length + ' faktor dihapus). Pengguna akan diminta mengaktifkan MFA lagi.' };
+}
+/** Admin ruang kerja: kirim tautan reset password ke email anggota (tidak bisa melihat/mengatur password). */
+export async function teamSendReset(p: any, u: Ctx) {
+  const [m] = await db()`select pr.id, pr.email from memberships m join profiles pr on pr.id = m.user_id where m.id = ${str(p.membershipId, 40)} and m.workspace_id = ${u.workspaceId}`;
+  if (!m) throw new AppError('NOT_FOUND', 'Anggota tidak ditemukan.');
+  await rateLimit('treset:' + m.id, 3, 3600, 'Tautan reset untuk anggota ini sudah dikirim. Coba lagi nanti.');
+  const { error } = await statelessClient().auth.resetPasswordForEmail(m.email, { redirectTo: ENV.appUrl + '/auth/confirm' });
+  if (error) throw new AppError('BUSY', 'Gagal mengirim email reset. Coba lagi nanti.');
+  await audit(u, 'team.sendReset', 'User', m.id, null, { email: maskEmail(m.email) });
+  return { message: 'Tautan reset password dikirim ke ' + maskEmail(m.email) + '.' };
 }
 export async function savePlatform(p: any, u: Ctx) {
   await requireReauth(u);
@@ -283,15 +385,24 @@ export async function savePlatform(p: any, u: Ctx) {
 export async function setWorkspacePlan(p: any, u: Ctx) {
   await requireReauth(u);
   const id = str(p.workspaceId, 40);
-  const [ws] = await db()`select id, plan, status from workspaces where id = ${id}`;
+  const [ws] = await db()`select id, plan, plan_expires_at, status, esign_override from workspaces where id = ${id}`;
   if (!ws) throw new AppError('NOT_FOUND', 'Ruang kerja tidak ditemukan.');
-  const patch: Record<string, string> = {};
-  if (p.plan) { if (!PLAN_LIMITS[p.plan]) throw vErr('plan', 'Paket tidak dikenal.'); patch.plan = p.plan; }
+  const patch: Record<string, unknown> = {};
+  if (p.plan) {
+    if (!PLAN_LIMITS[p.plan]) throw vErr('plan', 'Paket tidak dikenal.');
+    patch.plan = p.plan;
+    if (p.plan === 'pro') {
+      const days = int(p.days, 90, 1, 3650);
+      const base = effectivePlan(ws.plan, ws.planExpiresAt) === 'pro' && bool(p.extend) ? Math.max(Date.parse(ws.planExpiresAt), Date.now()) : Date.now();
+      patch.planExpiresAt = new Date(base + days * 86400000).toISOString();
+    } else patch.planExpiresAt = null;
+  }
   if (p.status) { if (!['aktif', 'ditangguhkan'].includes(p.status)) throw vErr('status', 'Status tidak dikenal.'); patch.status = p.status; }
+  if ('esign' in p) patch.esignOverride = p.esign === 'on' ? true : p.esign === 'off' ? false : null;
   if (Object.keys(patch).length) await db()`update workspaces set ${db()(patch as never)} where id = ${id}`;
   const slugs = await db()`select slug from links where workspace_id = ${id}`;
   slugs.forEach((l) => invalidateLinkCache(l.slug));
-  await audit({ ...u, workspaceId: id }, 'platform.workspace', 'Workspace', id, { plan: ws.plan, status: ws.status }, patch);
+  await audit({ ...u, workspaceId: id }, 'platform.workspace', 'Workspace', id, { plan: ws.plan, berlakuSampai: ws.planExpiresAt, status: ws.status, esign: ws.esignOverride }, patch);
   return getPlatform(p, u);
 }
 
@@ -302,7 +413,8 @@ export async function runDailyJob() {
   await db()`update invitations set status = 'kedaluwarsa' where status = 'aktif' and expires_at < now()`;
   await db()`delete from reauth where at < now() - interval '1 day'`;
   const [purge] = await db()`select purge_retention(${s.retentionClickDays}, ${s.retentionSecurityDays}, ${s.retentionAuditDays}) as r`;
-  return { expiredDocs: expired, purged: purge.r };
+  const payments = await reconcilePayments().catch((e) => ({ error: String(e?.message || e) }));
+  return { expiredDocs: expired, purged: purge.r, payments };
 }
 
 export { OPEN_STATUSES };

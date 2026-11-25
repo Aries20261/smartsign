@@ -4,6 +4,7 @@ import * as L from './services/links';
 import * as D from './services/docs';
 import * as S from './services/scan';
 import * as M from './services/admin';
+import * as B from './services/billing';
 
 type Fn = (p: any, u: Ctx, info: ReqInfo) => Promise<unknown>;
 type PubFn = (p: any, u: null, info: ReqInfo) => Promise<unknown>;
@@ -31,6 +32,8 @@ export const ROUTES: Record<string, Route> = {
   'invite.acceptNew': { roles: null, fn: (p) => A.inviteAcceptNew(p), limit: 10 },
   // Publik: shortlink & verifikasi
   'public.open': { roles: null, fn: (p, _u, i) => L.openLinkPublic(p, { ua: i.ua, referrer: String(p.ref || ''), country: i.country, ipHash: i.ipHash }) },
+  'public.shorten': { roles: null, fn: (p, _u, i) => L.shortenPublic(p, i.ipHash), limit: 40 },
+  'public.plans': { roles: null, fn: async () => B.publicPlans() },
   'public.report': { roles: null, fn: (p, _u, i) => L.reportAbuse(p, i.ipHash), limit: 10 },
   'public.verifyDoc': { roles: null, fn: (p, _u, i) => D.verifyDocByCode(p, null, i.ipHash) },
   'public.verifyHash': { roles: null, fn: (p, _u, i) => D.verifyDocHash(p, null, i.ipHash) },
@@ -70,6 +73,7 @@ export const ROUTES: Record<string, Route> = {
   'link.stats': { roles: READ, fn: L.linkStats },
   'link.export': { roles: ['admin', 'editor', 'auditor'], fn: L.exportLinks },
   'link.exportClicks': { roles: ['admin', 'editor', 'auditor'], fn: L.exportClicks },
+  'link.claim': { roles: EDIT, fn: L.claimLinks },
   'code.save': { roles: EDIT, fn: L.saveCodeAsset },
   // Dokumen
   'doc.list': { roles: READ, fn: D.listDocs },
@@ -89,12 +93,17 @@ export const ROUTES: Record<string, Route> = {
   'scan.verifyHash': { roles: ALL, fn: (p, u) => D.verifyDocHash(p, u) },
   'scan.history': { roles: ALL, fn: S.scanHistory },
   'scan.report': { roles: ALL, fn: S.scanReport },
+  // Paket & tagihan
+  'billing.get': { roles: ALL, fn: B.billingGet },
+  'billing.checkout': { roles: ADMIN, fn: B.billingCheckout },
+  'billing.check': { roles: ALL, fn: B.billingCheck },
   // Tim & pengaturan
   'team.list': { roles: ADMIN, fn: M.listMembers },
   'team.invite': { roles: ADMIN, fn: M.inviteMember },
   'team.revokeInvite': { roles: ADMIN, fn: M.revokeInvite },
   'team.role': { roles: ADMIN, fn: M.setMemberRole },
   'team.status': { roles: ADMIN, fn: M.setMemberStatus },
+  'team.sendReset': { roles: ADMIN, fn: M.teamSendReset },
   'team.revokeSessions': { roles: ADMIN, fn: M.revokeMemberSessions },
   'settings.get': { roles: ADMIN, fn: M.getSettings },
   'settings.save': { roles: ADMIN, fn: M.saveSettings },
@@ -110,5 +119,10 @@ export const ROUTES: Record<string, Route> = {
   'abuse.handle': { roles: ['admin', 'superadmin'], fn: M.handleAbuse },
   'platform.get': { roles: ['superadmin'], fn: M.getPlatform },
   'platform.save': { roles: ['superadmin'], fn: M.savePlatform },
-  'platform.workspace': { roles: ['superadmin'], fn: M.setWorkspacePlan }
+  'platform.workspace': { roles: ['superadmin'], fn: M.setWorkspacePlan },
+  'platform.users': { roles: ['superadmin'], fn: (p) => M.platformUsers(p) },
+  'platform.user': { roles: ['superadmin'], fn: M.platformUserUpdate },
+  'platform.resetPassword': { roles: ['superadmin'], fn: M.platformResetPassword },
+  'platform.resetMfa': { roles: ['superadmin'], fn: M.platformResetMfa },
+  'platform.payments': { roles: ['superadmin'], fn: (p) => B.listPayments(p) }
 };

@@ -34,7 +34,7 @@ export async function spaPage(mode: SpaMode, token = '', notice = ''): Promise<R
     passwordMin: APP.PASSWORD_MIN, demo: false, notice: String(notice).slice(0, 200)
   };
   const titles: Record<SpaMode, string> = { app: APP.NAME, sign: 'Tanda tangani dokumen', verify: 'Verifikasi dokumen', reset: 'Atur ulang password', invite: 'Undangan tim' };
-  const js = ['core', 'codes', 'app', 'pages', 'public'].map((f) => `<script src="/js/${f}.js?v=${ASSET_V}" defer></script>`).join('');
+  const js = ['core', 'codes', 'app', 'pages', 'billing', 'public'].map((f) => `<script src="/js/${f}.js?v=${ASSET_V}" defer></script>`).join('');
   const html = `<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="strict-origin-when-cross-origin"><meta name="color-scheme" content="light dark"><meta name="description" content="${esc(APP.TAGLINE)}">
 ${mode === 'app' || mode === 'verify' ? '' : '<meta name="robots" content="noindex,nofollow">'}<title>${esc(titles[mode] + (mode === 'app' ? ' · ' + APP.TAGLINE : ' · ' + APP.NAME))}</title>

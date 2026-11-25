@@ -40,12 +40,14 @@ export async function handleRpc(req: Request): Promise<Response> {
     }
     const sb = await authClient();
     const u = await requireSession(sb, info);
+    if (u.mustChangePassword && !['auth.me', 'auth.logout', 'auth.changePassword', 'auth.reauth'].includes(action))
+      throw new AppError('PASSWORD_CHANGE_REQUIRED', 'Anda harus mengganti password sementara terlebih dahulu.');
     if (u.mfaSetupRequired && !route.mfaSetupOk) throw new AppError('MFA_REQUIRED', 'Kebijakan ruang kerja mewajibkan admin mengaktifkan MFA terlebih dahulu.');
     authorize(u, route.roles);
     return json({ ok: true, data: await route.fn(payload, u, info) });
   } catch (err: any) {
     if (err instanceof AppError) {
-      const status = err.code === 'UNAUTHORIZED' ? 401 : err.code === 'FORBIDDEN' ? 403 : err.code === 'RATE_LIMIT' ? 429 : 200;
+      const status = err.code === 'UNAUTHORIZED' ? 401 : err.code === 'FORBIDDEN' ? 403 : err.code === 'RATE_LIMIT' ? 429 : err.code === 'PAYMENT_REQUIRED' ? 402 : 200;
       return json({ ok: false, code: err.code, message: err.message, ...(err.fields ? { fields: err.fields } : {}) }, status);
     }
     console.error(JSON.stringify({ rpc: action, ms: Date.now() - started, msg: err?.message, stack: String(err?.stack || '').split('\n').slice(0, 6).join(' | ') }));

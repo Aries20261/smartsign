@@ -124,7 +124,7 @@ td .title{font-weight:600}
   table.responsive tr{display:block;border-bottom:1px solid var(--border);padding:8px 4px}
   table.responsive td{display:flex;justify-content:space-between;gap:12px;border:none;padding:6px 8px}
   table.responsive td::before{content:attr(data-label);font-weight:700;color:var(--muted);font-size:.8rem;flex:0 0 38%}
-  table.responsive td > *{text-align:right;min-width:0}
+  table.responsive td > *{text-align:right;min-width:0;overflow-wrap:anywhere}
 }
 .pager{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;flex-wrap:wrap}
 .toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
@@ -212,3 +212,50 @@ td .title{font-weight:600}
 .codes span{background:var(--surface-2);padding:8px;border-radius:8px;text-align:center;border:1px solid var(--border)}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 @media print{.sidebar,.topbar,.bottom-nav,.toasts{display:none!important}}
+
+/* ---------- Beranda publik, harga, tagihan ---------- */
+.tabs a.tab{display:inline-flex;align-items:center;padding:10px 14px;min-height:44px;font-weight:600;color:var(--muted);text-decoration:none;border-bottom:3px solid transparent;white-space:nowrap}
+.tabs a.tab.active{color:var(--primary);border-bottom-color:var(--primary)}
+.home{min-height:100vh;display:flex;flex-direction:column}
+.home-top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px clamp(16px,4vw,40px);border-bottom:1px solid var(--border);background:var(--surface)}
+.home-top .brand{padding:0}
+.home-main{width:100%;max-width:1080px;margin:0 auto;padding:clamp(20px,5vw,56px) clamp(16px,4vw,32px);flex:1}
+.hero{text-align:center;max-width:760px;margin:0 auto 40px}
+.hero h1{font-size:clamp(1.6rem,4.5vw,2.5rem);line-height:1.15;margin:0 0 12px;letter-spacing:-.02em}
+.hero>p{margin:0 auto 22px;max-width:620px}
+.hero .card{text-align:left;padding:18px}
+.shorten-row{display:flex;gap:8px}
+.shorten-row input{flex:1;min-width:0;min-height:48px;font-size:1rem}
+.shorten-row .btn{min-height:48px;white-space:nowrap}
+@media (max-width:520px){.shorten-row{flex-direction:column}.shorten-row .btn{width:100%;justify-content:center}}
+.shorten-result{display:flex;gap:16px;align-items:flex-start;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)}
+.shorten-result .grow{min-width:0;flex:1}
+@media (max-width:520px){.shorten-result{flex-direction:column-reverse;align-items:stretch}.qr-mini{align-self:center}}
+.short-url{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:4px 0;font-size:1.25rem;font-weight:800}
+.short-url a{color:var(--primary);word-break:break-all}
+.qr-mini{flex:0 0 auto;background:#fff;border:1px solid var(--border);border-radius:10px;padding:6px;line-height:0}
+.recent-list{list-style:none;margin:0;padding:0}
+.recent-list li{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--border);min-width:0}
+.recent-list .grow{flex:1;min-width:0}
+.home-feats{margin-bottom:48px}
+.feat-ico{width:42px;height:42px;border-radius:12px;background:var(--primary-50);color:var(--primary);display:grid;place-items:center;margin-bottom:8px}
+.home-feats h3{margin:0 0 6px}
+.home-pricing{text-align:center}
+.home-pricing h2{font-size:1.6rem;margin:0 0 6px}
+.home-pricing>p{margin:0 0 20px}
+.pricing{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;text-align:left}
+@media (max-width:860px){.pricing{grid-template-columns:minmax(0,1fr)}}
+.plan{position:relative;display:flex;flex-direction:column;gap:10px;padding:20px}
+.pricing>.plan{margin:0}
+.plan.best{border:2px solid var(--primary)}
+.plan h3{margin:0}
+.plan-tag{position:absolute;top:-12px;right:16px;background:var(--primary);color:var(--on-primary);font-size:.75rem;font-weight:700;padding:3px 10px;border-radius:999px}
+.price b{font-size:1.8rem;font-weight:800;letter-spacing:-.02em}
+.plan-feat{list-style:none;margin:0 0 6px;padding:0;display:grid;gap:8px;flex:1}
+.plan-feat li{display:flex;gap:8px;align-items:flex-start;font-size:.95rem}
+.plan-feat svg{color:var(--ok);flex:0 0 auto;margin-top:2px}
+.home-foot{text-align:center;padding:24px 16px;border-top:1px solid var(--border)}
+.kpi-v{display:block;font-size:1.6rem;font-weight:800;margin-top:4px}
+.current-plan h2{font-size:1.4rem}
+@media (max-width:640px){.home-top .hide-sm{display:none}}
+#content:focus,#content:focus-visible{outline:none}

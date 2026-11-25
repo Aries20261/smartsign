@@ -2,7 +2,7 @@
 export const APP = {
   NAME: 'SmartSign',
   TAGLINE: 'Smartlink, QR & Tanda Tangan Elektronik',
-  VERSION: '2.0.0',
+  VERSION: '2.1.0',
   TZ: 'Asia/Jakarta',
   REAUTH_WINDOW_SEC: 300,
   LOGIN_MAX_FAIL: 5,
@@ -27,11 +27,19 @@ export const APP = {
 export const ROLES: Record<string, string> = { admin: 'Admin', editor: 'Editor', viewer: 'Pembaca', auditor: 'Auditor' };
 export const ALL_ROLES = Object.keys(ROLES);
 
-export const PLAN_LIMITS: Record<string, { label: string; links: number; docsPerMonth: number; members: number }> = {
-  free: { label: 'Gratis', links: 100, docsPerMonth: 10, members: 3 },
-  pro: { label: 'Pro', links: 5000, docsPerMonth: 200, members: 20 },
-  org: { label: 'Organisasi', links: 40000, docsPerMonth: 2000, members: 200 }
+export type PlanId = 'free' | 'pro' | 'lifetime';
+export const PLAN_LIMITS: Record<string, { label: string; links: number; docsPerMonth: number; members: number; esign: boolean }> = {
+  free: { label: 'Gratis', links: 100, docsPerMonth: 0, members: 3, esign: false },
+  pro: { label: 'Pro 3 Bulan', links: 5000, docsPerMonth: 200, members: 20, esign: true },
+  lifetime: { label: 'Lifetime', links: 10000, docsPerMonth: 300, members: 20, esign: true }
 };
+/** Paket yang dapat dibeli. Harga dalam rupiah (integer). */
+export const PLAN_PRICES: Record<'pro' | 'lifetime', { amount: number; days: number | null; label: string }> = {
+  pro: { amount: 50000, days: 90, label: 'Pro 3 Bulan' },
+  lifetime: { amount: 100000, days: null, label: 'Lifetime' }
+};
+/** Ruang kerja sistem untuk shortlink yang dibuat tanpa login. */
+export const PUBLIC_WS_ID = '00000000-0000-0000-0000-000000000001';
 
 export const DEFAULT_WS_SETTINGS = {
   requireMfaAdmin: true,
@@ -70,6 +78,10 @@ export const ENV = {
   get mailFrom() { return env('MAIL_FROM', 'SmartSign <no-reply@localhost>'); },
   get safeBrowsingKey() { return env('SAFE_BROWSING_KEY'); },
   get cronSecret() { return env('CRON_SECRET'); },
+  get mayarApiKey() { return env('MAYAR_API_KEY'); },
+  /** https://api.mayar.id/hl/v1 (produksi) atau https://api.mayar.io/hl/v1 (sandbox) */
+  get mayarApiBase() { return env('MAYAR_API_BASE', 'https://api.mayar.id/hl/v1').replace(/\/+$/, ''); },
+  get mayarWebhookToken() { return env('MAYAR_WEBHOOK_TOKEN'); },
   get superadminEmails() { return env('SUPERADMIN_EMAILS').toLowerCase().split(/[\s,]+/).filter(Boolean); },
   get isProd() { return process.env.NODE_ENV === 'production'; }
 };

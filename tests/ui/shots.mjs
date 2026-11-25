@@ -5,6 +5,7 @@ import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 const require = createRequire(import.meta.url);
+import postgres from 'postgres';
 const { chromium } = require(process.env.PLAYWRIGHT || 'playwright');
 
 const BASE = process.env.BASE || 'http://localhost:3000';
@@ -42,6 +43,13 @@ await fetch(href, { redirect: 'manual' });
 await rpc('auth.login', { email, password: PW });
 const mf = await rpc('auth.mfaStart', {});
 await rpc('auth.mfaConfirm', { code: totp(mf.secret) });
+// Demo: paket Lifetime + superadmin langsung lewat DB lokal (agar halaman e-sign & panel platform bisa dipotret)
+if (process.env.DATABASE_URL) {
+  const sql = postgres(process.env.DATABASE_URL, { max: 1 });
+  await sql`update profiles set platform_role = 'superadmin' where email = ${email}`;
+  await sql`update workspaces set plan = 'lifetime', plan_expires_at = null where owner_id = (select id from profiles where email = ${email})`;
+  await sql.end();
+} else throw new Error('Set DATABASE_URL (lokal) untuk menjalankan tes tampilan');
 const links = [['https://www.tokopedia.com/promo/akhir-tahun', 'Promo Akhir Tahun', 'promo-akhir-' + RUN], ['https://docs.google.com/forms/d/e/abc/viewform', 'Formulir Pendaftaran', 'daftar-' + RUN], ['https://example.com/katalog-2026.pdf', 'Katalog 2026', '']];
 for (const [d, t, s] of links) await rpc('link.create', { destination: d, title: t, slug: s, utm: { source: 'instagram', medium: 'social', campaign: 'desember' } });
 const pwLink = (await rpc('link.create', { destination: 'https://example.org/laporan-internal', title: 'Laporan Internal', password: 'kunci-1234' })).link;
@@ -81,13 +89,14 @@ async function shoot(name, path, { width = 1366, height = 860, auth = true, wait
   await ctx.close();
 }
 const shots = [
-  ['01-login', '/', { auth: false }], ['02-dashboard', '/#/dashboard'], ['03-links', '/#/links'], ['04-analitik', '/#/analytics', { wait: 2000 }],
+  ['00-beranda', '/', { auth: false }], ['00b-harga', '/', { auth: false, act: async (pg) => { await pg.evaluate(() => document.querySelector('#harga').scrollIntoView()); await sleep(300); } }],
+  ['01-login', '/', { auth: false, act: async (pg) => { await pg.click('header button:has-text("Masuk")'); await sleep(400); } }], ['15-paket', '/#/billing'], ['16-platform-pengguna', '/#/platform'], ['17-platform-workspace', '/#/platform/workspaces'], ['18-platform-pembayaran', '/#/platform/payments'], ['02-dashboard', '/#/dashboard'], ['03-links', '/#/links'], ['04-analitik', '/#/analytics', { wait: 2000 }],
   ['05-qr', '/#/qr', { wait: 1800 }], ['06-dokumen', '/#/docs/' + doc.id, { wait: 2500 }], ['07-tim', '/#/team'], ['08-audit', '/#/audit'], ['09-keamanan', '/#/security'],
   ['10-tanda-tangan', signPath, { auth: false, wait: 1500 }], ['11-verifikasi', '/verify?code=' + doc.code, { auth: false, wait: 1800 }], ['12-scanner', '/#/scanner'],
   ['13-perantara-password', '/go/' + pwLink.slug, { auth: false }], ['14-tidak-ditemukan', '/go/tidakada' + RUN, { auth: false }]
 ];
 for (const [n, p, o] of shots) await shoot(n, p, o);
-for (const [n, p, o] of [['m01-login', '/', { auth: false }], ['m02-dashboard', '/#/dashboard'], ['m03-links', '/#/links'], ['m06-dokumen', '/#/docs/' + doc.id, { wait: 2500 }], ['m10-tanda-tangan', signPath, { auth: false, wait: 1500 }], ['m11-verifikasi', '/verify?code=' + doc.code, { auth: false, wait: 1800 }]])
+for (const [n, p, o] of [['m00-beranda', '/', { auth: false }], ['m01-login', '/', { auth: false, act: async (pg) => { await pg.click('header button:has-text("Masuk")'); await sleep(400); } }], ['m15-paket', '/#/billing'], ['m16-platform', '/#/platform'], ['m02-dashboard', '/#/dashboard'], ['m03-links', '/#/links'], ['m06-dokumen', '/#/docs/' + doc.id, { wait: 2500 }], ['m10-tanda-tangan', signPath, { auth: false, wait: 1500 }], ['m11-verifikasi', '/verify?code=' + doc.code, { auth: false, wait: 1800 }]])
   await shoot(n, p, { ...(o || {}), width: 360, height: 780 });
 await browser.close();
 writeFileSync(OUT + '/console.txt', issues.join('\n') || 'Tidak ada error konsol / CSP / overflow.');

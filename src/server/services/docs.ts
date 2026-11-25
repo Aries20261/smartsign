@@ -69,8 +69,14 @@ async function docView(d: any, u?: Ctx, q: Q = db()) {
 }
 
 /* ---------- Unggah (langsung dari browser ke Storage lewat URL bertanda tangan) ---------- */
+/** Fitur tanda tangan digital (mengirim dokumen ke klien) hanya untuk paket berbayar atau akses yang diberikan admin. */
+export function assertEsign(u: Ctx) {
+  if (!u.esignEnabled) throw new AppError('PAYMENT_REQUIRED', 'Fitur tanda tangan digital tersedia untuk paket Pro 3 Bulan atau Lifetime. Buka menu Paket & Tagihan untuk berlangganan.');
+}
 async function assertQuota(u: Ctx) {
-  const plan = PLAN_LIMITS[u.plan] || PLAN_LIMITS.free;
+  assertEsign(u);
+  const base = PLAN_LIMITS[u.plan] || PLAN_LIMITS.free;
+  const plan = base.docsPerMonth > 0 ? base : { ...PLAN_LIMITS.pro, label: base.label }; // akses e-sign dari admin pada paket gratis
   const [c] = await db()`select count(*)::int as n from documents where workspace_id = ${u.workspaceId} and created_at >= date_trunc('month', now() at time zone 'Asia/Jakarta') at time zone 'Asia/Jakarta'`;
   if (c.n >= plan.docsPerMonth) throw new AppError('FORBIDDEN', 'Kuota dokumen bulan ini (' + plan.docsPerMonth + ') pada paket ' + plan.label + ' sudah habis.');
 }
@@ -191,6 +197,7 @@ async function inviteSigner(d: any, s: any, actorName: string, isReminder: boole
   await sigEvent(d.id, s.id, isReminder ? 'reminder_sent' : 'invited', actorName, { to: maskEmail(s.email), authMethod: s.authMethod });
 }
 export async function sendDoc(p: any, u: Ctx) {
+  assertEsign(u);
   const d = await db().begin(async (t) => {
     const d0 = await getWsDoc(p.id, u, t, true);
     assertManage(d0, u);
