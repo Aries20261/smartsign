@@ -80,7 +80,9 @@ CRON_SECRET=<acak>
    - Site URL: `https://<domain-anda>`
    - Redirect URLs: `https://<domain-anda>/**`
 6. **Authentication → Email Templates**: salin isi `supabase/templates/confirmation.html`, `recovery.html`, `email_change.html` ke template *Confirm signup*, *Reset password*, *Change email*.
-   Tautan di template memakai `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=...`. Ini wajib agar verifikasi berjalan di server.
+   Tautan di template memakai `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=...` (diverifikasi di server, lebih tahan terhadap pemindai tautan email).
+   Langkah ini **opsional**: template bawaan Supabase (`{{ .ConfirmationURL }}`) juga didukung, asalkan Site URL sudah benar.
+   Di mode Preview, klik **Source** untuk mengedit isi template.
 7. **Authentication → SMTP Settings**: pasang SMTP sendiri (mis. Resend, Brevo, Mailgun). SMTP bawaan Supabase dibatasi beberapa email per jam.
 8. Catat dari **Project Settings → API**: Project URL, publishable key, secret key.
    Lalu dari **Connect → Transaction pooler**: connection string port **6543**.
