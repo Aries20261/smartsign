@@ -70,7 +70,7 @@ CRON_SECRET=<acak>
 ## Deploy ke Supabase + Vercel
 
 ### 1. Supabase
-1. Buat proyek baru di [supabase.com](https://supabase.com) (region **Singapore** agar dekat dengan Vercel `sin1`).
+1. Buat proyek baru di [supabase.com](https://supabase.com) (region yang sama dengan `regions` di `vercel.json` (saat ini Sydney `ap-southeast-2` ↔ Vercel `syd1`; ganti ke `sin1` bila proyek Supabase di Singapore)).
 2. Terapkan skema database, pilih salah satu:
    - `supabase link --project-ref <ref>` lalu `supabase db push`, atau
    - buka **SQL Editor**, tempel isi `supabase/migrations/20261124000000_init.sql`, lalu **Run**.
@@ -105,7 +105,7 @@ CRON_SECRET=<acak>
 | `SHORT_DOMAIN` | opsional | domain pendek, mis. `https://s.domain.id` |
 | `SAFE_BROWSING_KEY` | opsional | Google Safe Browsing API |
 
-3. **Deploy**. `vercel.json` sudah mengatur region `sin1` dan cron harian pukul 01.00 WIB (`/api/cron/daily`).
+3. **Deploy**. `vercel.json` mengatur region fungsi (`syd1`) dan cron harian pukul 01.00 WIB (`/api/cron/daily`).
 4. Buka `https://<domain-anda>/api/health` untuk memastikan database, Auth, dan Storage tersambung (semua harus `OK`).
 5. Daftar akun memakai email yang ada di `SUPERADMIN_EMAILS`, verifikasi email, lalu aktifkan MFA saat diminta.
 
