@@ -106,7 +106,8 @@ CRON_SECRET=<acak>
 | `SAFE_BROWSING_KEY` | opsional | Google Safe Browsing API |
 
 3. **Deploy**. `vercel.json` sudah mengatur region `sin1` dan cron harian pukul 01.00 WIB (`/api/cron/daily`).
-4. Daftar akun memakai email yang ada di `SUPERADMIN_EMAILS`, verifikasi email, lalu aktifkan MFA saat diminta.
+4. Buka `https://<domain-anda>/api/health` untuk memastikan database, Auth, dan Storage tersambung (semua harus `OK`).
+5. Daftar akun memakai email yang ada di `SUPERADMIN_EMAILS`, verifikasi email, lalu aktifkan MFA saat diminta.
 
 ### 3. Domain pendek (opsional)
 Tambahkan domain kedua (mis. `s.domain.id`) di **Vercel → Settings → Domains** pada proyek yang sama, lalu isi `SHORT_DOMAIN`. Link `https://s.domain.id/<slug>` akan langsung diarahkan.
