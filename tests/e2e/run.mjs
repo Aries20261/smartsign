@@ -117,8 +117,8 @@ async function makePdf(pages = 2) {
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
 const PW = 'Lembayung-Senja-2026';
-const emails = { alice: 'admin@contoh.test', bob: 'bob.' + RUN + '@contoh.test', carol: 'carol.' + RUN + '@contoh.test', s1: 'penanda1.' + RUN + '@contoh.test', s2: 'penanda2.' + RUN + '@contoh.test' };
-const alice = new Client(), bob = new Client(), carol = new Client(), anon = new Client();
+const emails = { alice: 'admin@contoh.test', bob: 'bob.' + RUN + '@contoh.test', dina: 'dina.' + RUN + '@contoh.test', carol: 'carol.' + RUN + '@contoh.test', s1: 'penanda1.' + RUN + '@contoh.test', s2: 'penanda2.' + RUN + '@contoh.test' };
+const alice = new Client(), bob = new Client(), carol = new Client(), dina = new Client(), anon = new Client();
 let secret = '', recovery = [], link = null, docId = '', docCode = '', original = null;
 
 async function registerAndConfirm(c, email, nama) {
@@ -349,40 +349,48 @@ await test('Klaim shortlink publik setelah login, lalu ganti slug (slug lama tid
 
 /* ---------- Paket & pembayaran Mayar ---------- */
 let payId = '';
+await test('Superadmin tidak terkunci paywall: semua layanan terbuka tanpa bayar', async () => {
+  const me = (await alice.api('auth.me')).me;
+  assert(me.platformRole === 'superadmin' && me.esignEnabled === true && me.plan === 'lifetime', 'superadmin terkunci: ' + me.plan);
+  await registerAndConfirm(dina, emails.dina, 'Dina Pengguna');
+  await dina.api('auth.login', { email: emails.dina, password: PW });
+  const ds = await dina.api('auth.mfaStart', {});
+  await dina.api('auth.mfaConfirm', { code: totp(ds.secret) });
+});
 await test('Harga paket & paket gratis: e-signature terkunci (PAYMENT_REQUIRED)', async () => {
   const p = await anon.api('public.plans');
   assert(p.plans.map((x) => x.price).join(',') === '0,50000,100000', 'harga: ' + p.plans.map((x) => x.price));
-  const me = (await alice.api('auth.me')).me;
+  const me = (await dina.api('auth.me')).me;
   assert(me.plan === 'free' && me.esignEnabled === false, 'paket awal ' + me.plan);
-  await alice.fail('doc.uploadUrl', { fileName: 'a.pdf', size: 1000 }, 'PAYMENT_REQUIRED');
+  await dina.fail('doc.uploadUrl', { fileName: 'a.pdf', size: 1000 }, 'PAYMENT_REQUIRED');
 });
 await test('Checkout Mayar: validasi, tagihan tidak ganda, webhook palsu tidak mengaktifkan paket', async () => {
-  await alice.fail('billing.checkout', { plan: 'pro', mobile: '123' }, 'VALIDATION');
-  await alice.fail('billing.checkout', { plan: 'emas', mobile: '081234567890' }, 'VALIDATION');
-  const r = await alice.api('billing.checkout', { plan: 'pro', mobile: '0812-3456-7890' });
+  await dina.fail('billing.checkout', { plan: 'pro', mobile: '123' }, 'VALIDATION');
+  await dina.fail('billing.checkout', { plan: 'emas', mobile: '081234567890' }, 'VALIDATION');
+  const r = await dina.api('billing.checkout', { plan: 'pro', mobile: '0812-3456-7890' });
   assert(/^https:\/\/mock\.mayar\.local\/pay\//.test(r.payUrl), 'payUrl ' + r.payUrl);
   payId = r.id;
-  const again = await alice.api('billing.checkout', { plan: 'pro', mobile: '081234567890' });
+  const again = await dina.api('billing.checkout', { plan: 'pro', mobile: '081234567890' });
   assert(again.id === payId && again.reused, 'tagihan ganda dibuat');
-  assert((await alice.api('billing.check', { id: payId })).status === 'pending', 'belum bayar dianggap lunas');
+  assert((await dina.api('billing.check', { id: payId })).status === 'pending', 'belum bayar dianggap lunas');
   const fake = await fetch(BASE + '/api/webhooks/mayar?token=' + WH, { method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ event: 'payment.received', data: { customerEmail: emails.alice, amount: 50000, status: true } }) });
+    body: JSON.stringify({ event: 'payment.received', data: { customerEmail: emails.dina, amount: 50000, status: true } }) });
   assert(fake.ok, 'webhook status ' + fake.status);
-  assert((await alice.api('auth.me')).me.plan === 'free', 'webhook palsu mengaktifkan paket');
+  assert((await dina.api('auth.me')).me.plan === 'free', 'webhook palsu mengaktifkan paket');
   assert((await fetch(BASE + '/api/webhooks/mayar?token=salah', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status === 401, 'token webhook salah diterima');
   await carol.fail('billing.check', { id: payId }, 'UNAUTHORIZED');
 });
 await test('Bayar Pro 3 bulan: paket aktif 90 hari dan e-signature terbuka', async () => {
   const last = await (await fetch(MOCK + '/__last')).json();
   await fetch(MOCK + '/__pay/' + last.id, { method: 'POST' });
-  const ck = await alice.api('billing.check', { id: payId });
+  const ck = await dina.api('billing.check', { id: payId });
   assert(ck.status === 'paid', 'status ' + ck.status);
-  const me = (await alice.api('auth.me')).me;
+  const me = (await dina.api('auth.me')).me;
   assert(me.plan === 'pro' && me.esignEnabled, 'paket tidak aktif: ' + me.plan);
   const days = (Date.parse(me.planExpiresAt) - Date.now()) / 86400000;
   assert(days > 89.9 && days <= 90.01, 'masa aktif ' + days.toFixed(2) + ' hari');
-  assert((await alice.api('billing.check', { id: payId })).status === 'paid', 'tidak idempoten');
-  const b = await alice.api('billing.get');
+  assert((await dina.api('billing.check', { id: payId })).status === 'paid', 'tidak idempoten');
+  const b = await dina.api('billing.get');
   assert(b.payments[0].status === 'paid' && b.current.plan === 'pro', 'riwayat pembayaran');
   assert(psql(`select count(*) from audit_log where action = 'billing.paid' and entity_id = '${payId}'`) === '1', 'aktivasi tercatat lebih dari sekali');
 });

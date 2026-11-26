@@ -106,12 +106,14 @@ export async function requireSession(sb: SupabaseClient, info: ReqInfo, opts: { 
   }
   await ensureWorkspace(userId, p.nama);
   const mems = await sql`
-    select m.workspace_id, m.role, w.nama, w.settings, w.plan, w.plan_expires_at, w.esign_override from memberships m join workspaces w on w.id = m.workspace_id
+    select m.workspace_id, m.role, w.nama, w.settings, w.plan, w.plan_expires_at, w.esign_override, (select platform_role from profiles o where o.id = w.owner_id) as owner_role from memberships m join workspaces w on w.id = m.workspace_id
     where m.user_id = ${userId} and m.status = 'aktif' and w.status = 'aktif' order by m.created_at`;
   if (!mems.length) throw new AppError('FORBIDDEN', 'Akun Anda belum tergabung di ruang kerja aktif.');
   const cur = mems.find((m) => m.workspaceId === p.lastWorkspaceId) || mems[0];
   const settings = wsSettings(cur.settings);
-  const plan = effectivePlan(cur.plan, cur.planExpiresAt);
+  // Superadmin (atau anggota ruang kerja milik superadmin) tidak terkunci paywall: semua layanan terbuka untuk pengujian.
+  const unlocked = p.platformRole === 'superadmin' || cur.ownerRole === 'superadmin';
+  const plan = unlocked ? 'lifetime' : effectivePlan(cur.plan, cur.planExpiresAt);
   return {
     ...info,
     sb,
@@ -122,7 +124,7 @@ export async function requireSession(sb: SupabaseClient, info: ReqInfo, opts: { 
     workspaceName: cur.nama,
     plan,
     planExpiresAt: plan === 'pro' ? cur.planExpiresAt : null,
-    esignEnabled: cur.esignOverride == null ? !!PLAN_LIMITS[plan]?.esign : !!cur.esignOverride,
+    esignEnabled: unlocked ? true : cur.esignOverride == null ? !!PLAN_LIMITS[plan]?.esign : !!cur.esignOverride,
     settings,
     role: cur.role,
     platformRole: p.platformRole === 'superadmin' ? 'superadmin' : 'user',
