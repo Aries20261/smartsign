@@ -12,8 +12,8 @@ import { audit } from '../audit';
 import { rateBump, rateCount, rateLimit, rateReset } from '../ratelimit';
 import { sendMail } from '../mail';
 import type { Ctx, ReqInfo } from '../session';
-import { getFile, putFile } from '../storage';
-import { hashSecret, int, paginate, parseUa, randomSlug, sha256Hex, str, verifySecret } from '../util';
+import { getFile, putFile, removeFiles } from '../storage';
+import { hashSecret, hmacHex, int, paginate, parseUa, randomSlug, sha256Hex, str, verifySecret } from '../util';
 import { assertEsign } from './docs';
 
 export const QSIGN_HOURS = [1, 2, 4, 8, 12, 24, 48, 72];
@@ -40,6 +40,20 @@ const tokenHash = (t: string) => sha256Hex('qsign:' + t);
 export const qsignLink = (token: string) => ENV.appUrl + '/ttd?token=' + encodeURIComponent(token);
 export const qsignVerifyUrl = (code: string) => ENV.appUrl + '/ttd/v/' + encodeURIComponent(code);
 
+/**
+ * Isi barcode TTD: bukan URL, melainkan kode + tanda tangan HMAC dengan APP_SECRET.
+ * Pemindai biasa hanya melihat teks tak bermakna; hanya pemindai SmartSign (server) yang bisa memvalidasi.
+ */
+const QR_PREFIX = 'SSTTD1:';
+export function qsignQrPayload(code: string): string { return QR_PREFIX + code + ':' + hmacHex(ENV.appSecret || 'smartsign', 'qsign-qr:' + code).slice(0, 20).toUpperCase(); }
+export function isQsignPayload(text: string): boolean { return String(text || '').trim().toUpperCase().startsWith(QR_PREFIX); }
+/** Kembalikan kode bila barcode asli; null bila palsu/rusak. */
+export function parseQsignPayload(text: string): string | null {
+  const m = /^SSTTD1:(TTD-[A-Z0-9]{6,20}):([0-9A-F]{20})$/.exec(String(text || '').trim().toUpperCase());
+  if (!m) return null;
+  return qsignQrPayload(m[1]) === m[0] ? m[1] : null;
+}
+
 const effStatus = (r: any) => (r.status === 'pending' && new Date(r.expiresAt).getTime() <= Date.now() ? 'expired' : r.status);
 
 function view(r: any, withLink: boolean) {
@@ -50,7 +64,8 @@ function view(r: any, withLink: boolean) {
     expiresAt: r.expiresAt, openedAt: r.openedAt, signedAt: r.signedAt, createdAt: r.createdAt,
     createdBy: r.createdByName || null, signatureType: r.signatureType, recordHash: r.recordHash, signerDevice: r.signerDevice,
     link: withLink && status === 'pending' ? qsignLink(dec(r.tokenEnc)) : null,
-    verifyUrl: status === 'signed' ? qsignVerifyUrl(r.code) : null
+    verifyUrl: status === 'signed' ? qsignVerifyUrl(r.code) : null,
+    qrPayload: status === 'signed' ? qsignQrPayload(r.code) : null
   };
 }
 
@@ -126,6 +141,15 @@ export async function qsignCancel(p: any, u: Ctx) {
   if (r.status !== 'pending') throw new AppError('CONFLICT', 'Hanya permintaan yang belum ditandatangani yang bisa dibatalkan.');
   await db()`update sign_requests set status = 'cancelled' where id = ${r.id} and status = 'pending'`;
   await audit(u, 'qsign.cancel', 'sign_request', r.id, { status: effStatus(r) }, { status: 'cancelled' });
+  return { ok: true };
+}
+
+/** Hapus permanen (termasuk gambar tanda tangan). Barcode yang sudah dicetak tidak lagi terverifikasi. */
+export async function qsignDelete(p: any, u: Ctx) {
+  const r = await own(p.id, u);
+  if (r.signaturePath) await removeFiles([r.signaturePath]).catch(() => { /* berkas mungkin sudah tidak ada */ });
+  await db()`delete from sign_requests where id = ${r.id} and workspace_id = ${u.workspaceId}`;
+  await audit(u, 'qsign.delete', 'sign_request', r.id, { code: r.code, signerName: r.signerName, signerTitle: r.signerTitle, status: effStatus(r) }, null);
   return { ok: true };
 }
 
@@ -213,10 +237,15 @@ export async function qsignSubmit(p: any, info: ReqInfo) {
 
 /** Verifikasi publik dari barcode: hanya data identitas & bukti hash, tanpa gambar tanda tangan. */
 export async function qsignVerify(p: any) {
-  const code = str(p.code, 40).toUpperCase();
+  let code = str(p.code, 40).toUpperCase();
+  if (p.payload != null || isQsignPayload(code)) {
+    const c = parseQsignPayload(str(p.payload ?? p.code, 120));
+    if (!c) throw new AppError('NOT_FOUND', 'Barcode tidak dikenali atau sudah diubah. Ini bukan barcode TTD asli dari ' + APP.NAME + '.');
+    code = c;
+  }
   if (!/^TTD-[A-Z0-9]{6,20}$/.test(code)) throw new AppError('NOT_FOUND', 'Kode tanda tangan tidak ditemukan.');
   const [r] = await db()`select r.*, w.nama as workspace_name from sign_requests r join workspaces w on w.id = r.workspace_id where r.code = ${code}`;
-  if (!r) throw new AppError('NOT_FOUND', 'Kode tanda tangan tidak ditemukan.');
+  if (!r) throw new AppError('NOT_FOUND', 'Kode tanda tangan tidak ditemukan atau sudah dihapus pemiliknya.');
   const status = effStatus(r);
   if (status !== 'signed') return { code, valid: false, status, statusLabel: LABEL[status] };
   return {

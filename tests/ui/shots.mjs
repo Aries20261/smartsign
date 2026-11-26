@@ -127,8 +127,21 @@ for (const [n, p, o] of [['22-ttd-hasil', '/#/ttd/' + qsSign.id, { wait: 2500 }]
     const path = OUT + '/' + dl.suggestedFilename(); await dl.saveAs(path);
     const head = (await import('node:fs')).readFileSync(path).subarray(0, 4).toString('hex');
     if (head !== '89504e47') issues.push('unduhan ' + label + ' bukan PNG');
+    if (label === 'Unduh barcode PNG') globalThis.barcodePath = path;
   }
+  // Barcode hasil unduhan harus terbaca oleh pemindai SmartSign (dalam aplikasi dan halaman publik)
+  await pg.goto(BASE + '/#/scanner', { waitUntil: 'networkidle' }); await sleep(800);
+  await pg.click('[role=tab]:has-text("Unggah")');
+  await pg.setInputFiles('#scan-img', globalThis.barcodePath);
+  try { await pg.waitForSelector('.result-card.valid', { timeout: 10000 }); await pg.screenshot({ path: OUT + '/25-scanner-barcode-ttd.png' }); }
+  catch { issues.push('Scanner aplikasi tidak memvalidasi barcode TTD'); await pg.screenshot({ path: OUT + '/25-scanner-barcode-ttd-GAGAL.png' }); }
   await ctx.close();
+  const pctx = await browser.newContext({ viewport: { width: 1366, height: 860 } });
+  const pp = await pctx.newPage(); await pp.goto(BASE + '/ttd/v', { waitUntil: 'networkidle' }); await sleep(600);
+  await pp.setInputFiles('#qv-file', globalThis.barcodePath);
+  try { await pp.waitForSelector('text=Tanda tangan elektronik asli dan tercatat', { timeout: 10000 }); await pp.screenshot({ path: OUT + '/26-verifikasi-publik-pindai.png' }); }
+  catch { issues.push('Halaman verifikasi publik tidak membaca barcode TTD'); await pp.screenshot({ path: OUT + '/26-GAGAL.png' }); }
+  await pctx.close();
 }
 for (const [n, p, o] of [['m19-ttd-daftar', '/#/ttd'], ['m22-ttd-hasil', '/#/ttd/' + qsSign.id, { wait: 2500 }], ['m21-ttd-penanda', qsTok(qsPending), { auth: false }], ['m23-ttd-verifikasi', '/ttd/v/' + qsDone.code, { auth: false, wait: 1500 }], ['m00-beranda', '/', { auth: false }], ['m01-login', '/', { auth: false, act: async (pg) => { await pg.click('header button:has-text("Masuk")'); await sleep(400); } }], ['m15-paket', '/#/billing'], ['m16-platform', '/#/platform'], ['m02-dashboard', '/#/dashboard'], ['m03-links', '/#/links'], ['m06-dokumen', '/#/docs/' + doc.id, { wait: 2500 }], ['m10-tanda-tangan', signPath, { auth: false, wait: 1500 }], ['m11-verifikasi', '/verify?code=' + doc.code, { auth: false, wait: 1800 }]])
   await shoot(n, p, { ...(o || {}), width: 360, height: 780 });

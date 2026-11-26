@@ -1,5 +1,5 @@
 import { db } from '../db';
-import { ENV } from '../config';
+import { APP, ENV } from '../config';
 import { AppError, vErr } from '../errors';
 import { audit } from '../audit';
 import { rateLimit } from '../ratelimit';
@@ -8,6 +8,7 @@ import { buildVerificationReport } from '../pdf';
 import { maskEmail, paginate, str } from '../util';
 import { analyzeUrl, hostOf, publicLinkView } from './links';
 import { recordVerification, verifyDocByCode } from './docs';
+import { isQsignPayload, qsignVerify } from './qsign';
 
 const LINK_STATE: Record<string, { result: string; msg: string }> = {
   ok: { result: 'valid', msg: 'Shortlink aktif dan terdaftar di sistem.' },
@@ -38,6 +39,20 @@ export async function scanCheck(p: any, u: Ctx) {
   if (!content) throw vErr('content', 'Tidak ada isi kode untuk diperiksa.');
   await rateLimit('scan:' + u.userId, 120, 3600);
   const source = ['camera', 'upload', 'manual'].includes(p.source) ? p.source : 'manual';
+  const legacyTtd = /^https?:\/\//i.test(content) && hostOf(content) === hostOf(ENV.appUrl) ? /\/ttd\/v\/(TTD-[A-Z0-9]{6,20})$/i.exec(new URL(content).pathname) : null;
+  if (isQsignPayload(content) || legacyTtd) {
+    // Barcode TTD Realtime: hanya bisa divalidasi oleh server SmartSign (HMAC); legacyTtd = barcode lama berisi URL verifikasi
+    let ttd: any = null;
+    try { ttd = await qsignVerify(legacyTtd ? { code: legacyTtd[1] } : { payload: content }); } catch { ttd = null; }
+    const out: any = !ttd
+      ? { kind: 'ttd', result: 'invalid', reasonCode: 'ttd_forged', message: 'Barcode TTD tidak dikenali, sudah diubah, atau sudah dihapus pemiliknya.', details: {} }
+      : ttd.valid
+        ? { kind: 'ttd', result: 'valid', reasonCode: 'ttd_valid', message: 'Tanda tangan elektronik asli dan tercatat di ' + APP.NAME + '.', ttd, details: {} }
+        : { kind: 'ttd', result: ttd.status === 'expired' ? 'expired' : 'invalid', reasonCode: 'ttd_' + ttd.status, message: 'Barcode asli, tetapi belum ditandatangani (' + ttd.statusLabel + ').', ttd, details: {} };
+    out.source = source;
+    out.recordId = await recordVerification(u, 'ttd', null, ttd?.code || 'SSTTD1', out.result, out.reasonCode, { code: ttd?.code || null });
+    return out;
+  }
   const own = /^https?:\/\//i.test(content) ? ownUrlParts(content) : null;
   let out: any;
   if (own?.sign) {

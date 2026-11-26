@@ -392,7 +392,8 @@ function scanResultCard(r) {
     h('p', { style: 'margin:6px 0 10px', text: r.message || '' }));
   const kv = h('dl', { class: 'kv' });
   const add = (k, v) => { if (v) kv.append(h('dt', { text: k }), h('dd', null, v instanceof Node ? v : h('span', { class: 'mono', text: String(v) }))); };
-  add('Jenis', { shortlink: 'Shortlink sistem ini', url: 'Tautan eksternal', document: 'Dokumen bertanda tangan', file: 'Berkas PDF', text: 'Teks', sign: 'Tautan penandatanganan', scheme: 'Skema tidak diizinkan' }[r.kind] || r.kind);
+  add('Jenis', { shortlink: 'Shortlink sistem ini', url: 'Tautan eksternal', document: 'Dokumen bertanda tangan', file: 'Berkas PDF', text: 'Teks', sign: 'Tautan penandatanganan', scheme: 'Skema tidak diizinkan', ttd: 'Barcode TTD ' + BOOT.appName }[r.kind] || r.kind);
+  if (r.ttd && r.ttd.signerName) { add('Nama', r.ttd.signerName); add('Jabatan', r.ttd.signerTitle); add('Tujuan', r.ttd.purpose); add('Instansi / pengirim', r.ttd.organization); add('Waktu tanda tangan', dt(r.ttd.signedAt)); add('Kode verifikasi', r.ttd.code); }
   add('Domain tujuan', det.domain);
   if (det.destination) add('Tujuan', det.destination);
   if (det.text) add('Isi', h('span', { class: 'mono', style: 'white-space:pre-wrap', text: det.text }));

@@ -85,6 +85,7 @@ export const ROUTES: Record<string, Route> = {
   'qsign.create': { roles: EDIT, fn: Q.qsignCreate },
   'qsign.renew': { roles: EDIT, fn: Q.qsignRenew },
   'qsign.cancel': { roles: EDIT, fn: Q.qsignCancel },
+  'qsign.delete': { roles: EDIT, fn: Q.qsignDelete },
   'code.save': { roles: EDIT, fn: L.saveCodeAsset },
   // Dokumen
   'doc.list': { roles: READ, fn: D.listDocs },

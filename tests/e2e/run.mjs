@@ -612,6 +612,23 @@ await test('TTD Realtime: link 8 jam, tanda tangan tanpa akun, unduh & verifikas
   await anon.fail('qsign.verify', { code: 'TTD-TIDAKADA00' }, 'NOT_FOUND');
   await carol.fail('qsign.get', { id: r.id }, 'NOT_FOUND');
   assert(psql(`select count(*) from audit_log where action = 'qsign.signed' and entity_id = '${r.id}'`) === '1', 'audit');
+  // Barcode khusus SmartSign: isi bertanda tangan HMAC, hanya server yang bisa memvalidasi
+  assert(/^SSTTD1:TTD-[A-Z0-9]{10}:[0-9A-F]{20}$/.test(g.qrPayload) && !g.qrPayload.includes('http'), 'isi barcode ' + g.qrPayload);
+  const vp = await anon.api('qsign.verify', { payload: g.qrPayload });
+  assert(vp.valid && vp.code === s.code, 'verifikasi barcode');
+  const forged = g.qrPayload.slice(0, -1) + (g.qrPayload.endsWith('A') ? 'B' : 'A');
+  await anon.fail('qsign.verify', { payload: forged }, 'NOT_FOUND');
+  await anon.fail('qsign.verify', { payload: 'SSTTD1:TTD-AAAAAAAAAA:' + g.qrPayload.split(':')[2] }, 'NOT_FOUND');
+  const sc = await alice.api('scan.check', { content: g.qrPayload, source: 'camera' });
+  assert(sc.kind === 'ttd' && sc.result === 'valid' && sc.ttd.signerName === 'Dr. Siti Rahmawati', 'pemindai: ' + JSON.stringify(sc).slice(0, 200));
+  assert((await alice.api('scan.check', { content: forged, source: 'camera' })).result === 'invalid', 'pemindai menerima barcode palsu');
+  // Hapus permanen: barcode tidak terverifikasi lagi; ruang kerja lain tidak bisa menghapus
+  await carol.fail('qsign.delete', { id: r.id }, 'NOT_FOUND');
+  await alice.api('qsign.delete', { id: r.id });
+  await alice.fail('qsign.get', { id: r.id }, 'NOT_FOUND');
+  await anon.fail('qsign.verify', { payload: g.qrPayload }, 'NOT_FOUND');
+  await anon.fail('qsign.verify', { code: s.code }, 'NOT_FOUND');
+  assert(psql(`select count(*) from audit_log where action = 'qsign.delete' and entity_id = '${r.id}'`) === '1', 'audit hapus');
 });
 await test('TTD Realtime: kedaluwarsa, PIN salah dibatasi, buat ulang link, batal', async () => {
   const r = (await alice.api('qsign.create', { signerName: 'Budi Hartono', signerTitle: 'Direktur', purpose: 'Uji PIN ' + RUN, hours: 1, pin: '4821' })).request;

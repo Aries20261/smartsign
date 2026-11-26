@@ -36,27 +36,31 @@ function qsFitText(ctx, text, maxW, weight, size, minSize) {
   while (ctx.measureText(t).width > maxW && t.length > 4) t = t.slice(0, -2);
   return t === text ? t : t.slice(0, -1) + '…';
 }
-/** Barcode TTD: QR verifikasi + keterangan penanda tangan, latar putih. */
+/** Barcode TTD: QR khusus SmartSign + keterangan penanda tangan + kode verifikasi, latar putih. */
 async function qsBarcodeCanvas(r) {
-  const qr = await qsQrCanvas(r.verifyUrl, 560);
-  const W = 640, H = qr.height + 230;
+  const qr = await qsQrCanvas(r.qrPayload, 560);
+  const W = 640, H = qr.height + 270;
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
   ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
   ctx.drawImage(qr, (W - qr.width) / 2, 20);
   ctx.fillStyle = '#111827'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-  let y = qr.height + 58;
+  let y = qr.height + 56;
   ctx.font = '400 20px Inter, "Segoe UI", Arial, sans-serif'; ctx.fillText('Ditandatangani secara elektronik oleh', W / 2, y);
-  y += 40; ctx.fillText(qsFitText(ctx, r.signerName, W - 40, '700', 30, 18), W / 2, y);
-  y += 34; ctx.fillText(qsFitText(ctx, r.signerTitle, W - 40, '400', 22, 14), W / 2, y);
-  y += 34; ctx.fillStyle = '#4b5563'; ctx.font = '400 17px Inter, "Segoe UI", Arial, sans-serif'; ctx.fillText(dt(r.signedAt) + ' · ' + r.code, W / 2, y);
+  y += 38; ctx.fillText(qsFitText(ctx, r.signerName, W - 40, '700', 30, 18), W / 2, y);
+  y += 32; ctx.fillText(qsFitText(ctx, r.signerTitle, W - 40, '400', 22, 14), W / 2, y);
+  y += 30; ctx.fillStyle = '#4b5563'; ctx.font = '400 17px Inter, "Segoe UI", Arial, sans-serif'; ctx.fillText(dt(r.signedAt), W / 2, y);
+  y += 38; ctx.fillStyle = '#111827'; ctx.font = '700 24px ui-monospace, Menlo, Consolas, monospace'; ctx.fillText('Kode verifikasi: ' + r.code, W / 2, y);
+  y += 26; ctx.fillStyle = '#4b5563'; ctx.font = '400 15px Inter, "Segoe UI", Arial, sans-serif';
+  ctx.fillText(qsFitText(ctx, 'Pindai hanya dengan ' + BOOT.appName + ': ' + qsVerifyHost(), W - 40, '400', 15, 11), W / 2, y);
   return cv;
 }
+function qsVerifyHost() { try { return new URL(BOOT.webAppUrl).host + '/ttd/v'; } catch (e) { return '/ttd/v'; } }
 /** Spesimen: barcode + gambar tanda tangan + nama + jabatan (latar transparan, siap ditempel di surat). */
 async function qsSpecimenCanvas(r) {
-  const qr = await qsQrCanvas(r.verifyUrl, 300);
+  const qr = await qsQrCanvas(r.qrPayload, 300);
   const sig = await qsLoadImg(r.signatureImage);
-  const W = 1100, H = 400, X = qr.width + 50, TW = W - X - 20;
+  const W = 1100, H = 410, X = qr.width + 50, TW = W - X - 20;
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
   ctx.drawImage(qr, 20, (H - qr.height) / 2);
@@ -70,9 +74,19 @@ async function qsSpecimenCanvas(r) {
   const nw = ctx.measureText(name).width;
   ctx.fillRect(X, 293, nw, 2);
   ctx.fillText(qsFitText(ctx, r.signerTitle, TW, '400', 26, 15), X, 332);
+  ctx.font = '700 19px ui-monospace, Menlo, Consolas, monospace';
+  ctx.fillText('Kode verifikasi: ' + r.code, X, 366);
   ctx.fillStyle = '#4b5563';
-  ctx.fillText(qsFitText(ctx, 'Kode ' + r.code + ' · verifikasi: pindai barcode', TW, '400', 18, 12), X, 368);
+  ctx.fillText(qsFitText(ctx, 'Pindai hanya dengan ' + BOOT.appName + ': ' + qsVerifyHost(), TW, '400', 15, 11), X, 390);
   return cv;
+}
+
+async function qsDelete(r, after) {
+  const msg = r.status === 'signed'
+    ? 'Data tanda tangan ' + r.signerName + ' dan gambarnya dihapus permanen. Barcode yang sudah dicetak atau dibagikan tidak akan terverifikasi lagi.'
+    : 'Permintaan untuk ' + r.signerName + ' dihapus permanen dan link-nya langsung tidak berlaku.';
+  if (!(await confirmDialog('Hapus permanen?', msg, 'Hapus', true))) return;
+  try { await callApi('qsign.delete', { id: r.id }); toast('Data dihapus.', 'ok'); after(); } catch (e) { toastErr(e); }
 }
 
 /* ================= Halaman aplikasi ================= */
@@ -120,7 +134,8 @@ function qsList(c, r) {
         tdm('Dibuat', h('div', { class: 'small', text: dt(x.createdAt) }), x.createdBy ? h('div', { class: 'small muted', text: 'oleh ' + x.createdBy }) : null),
         tdm('Aksi', h('div', { class: 'row', style: 'justify-content:flex-end;flex-wrap:wrap' },
           x.link ? h('button', { class: 'btn sm', onclick: () => copyText(x.link) }, icon('copy', 14), 'Salin link') : null,
-          h('a', { class: 'btn sm' + (x.status === 'signed' ? ' primary' : ''), href: '#/ttd/' + x.id }, x.status === 'signed' ? 'Unduh' : 'Detail')))))))),
+          h('a', { class: 'btn sm' + (x.status === 'signed' ? ' primary' : ''), href: '#/ttd/' + x.id }, x.status === 'signed' ? 'Unduh' : 'Detail'),
+          can.edit() ? h('button', { class: 'btn sm danger', 'aria-label': 'Hapus ' + x.signerName, onclick: () => qsDelete(x, () => load(false)) }, 'Hapus') : null))))))),
     pager(pg, (p) => { st.page = p; load(false); }));
   };
   const load = async (silent) => {
@@ -207,7 +222,8 @@ function qsDetail(c, id) {
   };
   const poll = () => { clearTimeout(timer); timer = setTimeout(() => { if (document.body.contains(box) && State.route === 'ttd' && State.params.id === id) { if (!document.hidden) load(true); else poll(); } }, QS_POLL_MS); };
   const render = (r) => {
-    box.appendChild(pageHead(r.signerName, r.signerTitle, h('a', { class: 'btn', href: '#/ttd' }, '‹ Kembali')));
+    box.appendChild(pageHead(r.signerName, r.signerTitle, h('div', { class: 'row' }, h('a', { class: 'btn', href: '#/ttd' }, '‹ Kembali'),
+      can.edit() ? h('button', { class: 'btn danger', onclick: () => qsDelete(r, () => { clearTimeout(timer); location.hash = '#/ttd'; }) }, 'Hapus') : null)));
     const info = h('div', { class: 'card' }, h('dl', { class: 'kv' },
       h('dt', null, 'Status'), h('dd', null, qsBadge(r), r.status === 'pending' ? h('span', { class: 'small muted', style: 'margin-left:8px', text: qsRemain(r.expiresAt) + (r.openedAt ? ' · dibuka ' + rel(r.openedAt) : ' · belum dibuka') }) : null),
       h('dt', null, 'Tujuan'), h('dd', { text: r.purpose }),
@@ -246,9 +262,9 @@ function qsDetail(c, id) {
           h('div', { class: 'stack' }, h('b', null, 'Gambar tanda tangan'), prevSig,
             h('button', { class: 'btn', onclick: () => downloadBlob(dataUrlBlob(r.signatureImage), 'ttd-' + base + '.png') }, icon('download', 16), 'Unduh tanda tangan PNG'))),
         h('div', { class: 'row', style: 'margin-top:14px;flex-wrap:wrap' },
-          h('button', { class: 'btn sm', onclick: () => copyText(r.verifyUrl) }, icon('copy', 14), 'Salin link verifikasi'),
+          h('button', { class: 'btn sm', onclick: () => copyText(r.code) }, icon('copy', 14), 'Salin kode verifikasi'),
           h('a', { class: 'btn sm', href: r.verifyUrl, target: '_blank', rel: 'noopener' }, icon('ext', 14), 'Buka halaman verifikasi')),
-        h('p', { class: 'small muted', style: 'margin-top:10px' }, 'Barcode berisi link verifikasi publik. Siapa pun yang memindainya melihat nama, jabatan, tujuan, dan waktu tanda tangan (tanpa gambar tanda tangan). Gambar PNG berlatar transparan, siap ditempel di Word atau PDF.')));
+        h('p', { class: 'small muted', style: 'margin-top:10px' }, 'Barcode ini hanya bisa dibaca oleh pemindai ' + BOOT.appName + ' (menu Scanner, atau halaman ' + qsVerifyHost() + ' bagi yang tidak punya akun). Aplikasi pemindai biasa hanya melihat kode acak. Isinya dilindungi tanda tangan digital server, jadi barcode palsu atau yang diubah akan ditolak. Gambar spesimen berlatar transparan, siap ditempel di Word atau PDF.')));
     }
   };
   load(false);
@@ -328,20 +344,57 @@ PublicPages.qsign = (root) => {
 PublicPages.qverify = (root) => {
   const card = publicFrame(root, 'Verifikasi tanda tangan', false);
   const result = h('div', { 'aria-live': 'polite' });
-  const form = h('form', { novalidate: true, class: 'row', style: 'flex-wrap:nowrap;align-items:flex-end;margin-bottom:14px' },
-    h('div', { class: 'field', style: 'margin:0;flex:1;min-width:0' }, h('label', { for: 'qv-code' }, 'Kode tanda tangan'), h('input', { id: 'qv-code', name: 'code', value: BOOT.token || '', placeholder: 'TTD-XXXXXXXXXX', maxlength: 30 })),
+  card.appendChild(h('p', { class: 'muted' }, 'Pindai barcode TTD ' + BOOT.appName + ' dengan kamera, unggah fotonya, atau ketik kode verifikasi yang tercetak di bawah barcode.'));
+  const form = h('form', { novalidate: true, class: 'row', style: 'flex-wrap:nowrap;align-items:flex-end;margin-bottom:10px' },
+    h('div', { class: 'field', style: 'margin:0;flex:1;min-width:0' }, h('label', { for: 'qv-code' }, 'Kode verifikasi'), h('input', { id: 'qv-code', name: 'code', value: /^TTD-/i.test(BOOT.token || '') ? BOOT.token : '', placeholder: 'TTD-XXXXXXXXXX', maxlength: 30 })),
     h('button', { class: 'btn primary', type: 'submit' }, 'Periksa'));
-  const run = (code) => loadInto(result, () => rawApi('qsign.verify', { code: code }), (r) => {
+  const video = h('video', { playsinline: true, muted: true, 'aria-label': 'Pratinjau kamera' });
+  const camBox = h('div', { class: 'scan-video', style: 'display:none;margin-bottom:10px' }, video, h('div', { class: 'scan-frame', 'aria-hidden': 'true' }));
+  const camStatus = h('p', { class: 'small muted', 'aria-live': 'polite' });
+  let stream = null, raf = 0;
+  const stopCam = () => { if (raf) cancelAnimationFrame(raf); raf = 0; if (stream) stream.getTracks().forEach((t) => t.stop()); stream = null; camBox.style.display = 'none'; };
+  const fileIn = h('input', { type: 'file', accept: 'image/*', id: 'qv-file', capture: 'environment', style: 'display:none' });
+  const scanBar = h('div', { class: 'row', style: 'flex-wrap:wrap;margin-bottom:6px' },
+    h('button', { class: 'btn', type: 'button', onclick: startCam }, icon('camera', 16), 'Pindai dengan kamera'),
+    h('button', { class: 'btn', type: 'button', onclick: () => fileIn.click() }, icon('upload', 16), 'Unggah foto barcode'), fileIn);
+  const show = (r) => {
     if (!r.valid) return result.appendChild(h('div', { class: 'callout bad' }, h('b', null, 'Belum sah. '), 'Kode ' + r.code + ' terdaftar tetapi statusnya: ' + r.statusLabel + '.'));
-    result.append(h('div', { class: 'callout ok' }, icon('check', 18), h('b', null, ' Tanda tangan elektronik tercatat dan sah'), ' di ' + BOOT.appName + '.'),
+    result.append(h('div', { class: 'callout ok' }, icon('check', 18), h('b', null, ' Tanda tangan elektronik asli dan tercatat'), ' di ' + BOOT.appName + '.'),
       h('dl', { class: 'kv', style: 'margin-top:12px' },
         h('dt', null, 'Nama'), h('dd', null, h('b', { text: r.signerName })), h('dt', null, 'Jabatan'), h('dd', { text: r.signerTitle }),
         h('dt', null, 'Tujuan'), h('dd', { text: r.purpose }), h('dt', null, 'Instansi / pengirim'), h('dd', { text: r.organization }),
-        h('dt', null, 'Waktu tanda tangan'), h('dd', { text: dt(r.signedAt) }), h('dt', null, 'Kode'), h('dd', null, h('code', { text: r.code })),
+        h('dt', null, 'Waktu tanda tangan'), h('dd', { text: dt(r.signedAt) }), h('dt', null, 'Kode verifikasi'), h('dd', null, h('code', { text: r.code })),
         h('dt', null, 'Sidik jari (SHA-256)'), h('dd', null, h('code', { class: 'small', style: 'word-break:break-all', text: r.recordHash }))),
       h('p', { class: 'small muted', style: 'margin-top:12px' }, 'Tanda tangan elektronik tidak tersertifikasi (bukan PSrE), dibuat lewat link sekali pakai yang berbatas waktu. Pastikan nama dan tujuan di atas sesuai dengan dokumen yang Anda pegang.'));
+  };
+  const run = (payload) => loadInto(result, () => rawApi('qsign.verify', payload), show);
+  async function startCam() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { camStatus.textContent = 'Browser tidak mendukung kamera. Gunakan "Unggah foto barcode".'; return; }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+      camBox.style.display = ''; video.srcObject = stream; await video.play();
+      camStatus.textContent = 'Arahkan kamera ke barcode…';
+      const cv = document.createElement('canvas'); let last = 0, busy = false;
+      const loop = async (t) => {
+        if (!stream) return; raf = requestAnimationFrame(loop);
+        if (busy || t - last < 300) return; last = t; busy = true;
+        try { const res = await decodeSource(video, cv); if (res && res.text) { stopCam(); camStatus.textContent = 'Barcode terbaca.'; handle(res.text); } } catch (e) { /* frame gagal */ } finally { busy = false; }
+      };
+      raf = requestAnimationFrame(loop);
+    } catch (e) { stopCam(); camStatus.textContent = e && e.name === 'NotAllowedError' ? 'Izin kamera ditolak. Gunakan "Unggah foto barcode" atau ketik kodenya.' : 'Kamera tidak dapat diakses. Gunakan "Unggah foto barcode".'; }
+  }
+  fileIn.addEventListener('change', async () => {
+    const f = fileIn.files[0]; if (!f) return;
+    camStatus.textContent = 'Membaca gambar…';
+    try { const res = await decodeSource(await fileToImage(f)); fileIn.value = ''; if (!res) { camStatus.textContent = 'Tidak ada barcode yang terbaca. Pastikan foto tajam dan barcode terlihat utuh.'; return; } camStatus.textContent = 'Barcode terbaca.'; handle(res.text); }
+    catch (e) { camStatus.textContent = 'Gambar tidak dapat dibaca.'; }
   });
-  form.addEventListener('submit', (e) => { e.preventDefault(); const v = $('#qv-code', form).value.trim(); if (v) run(v); });
-  card.append(form, result, h('div', { class: 'divider' }), h('button', { class: 'btn ghost', onclick: goLogin }, 'Masuk ke aplikasi'));
-  if (BOOT.token) run(BOOT.token);
+  function handle(text) {
+    if (/^SSTTD1:/i.test(text)) return run({ payload: text });
+    if (/\/ttd\/v\/(TTD-[A-Z0-9]+)/i.test(text)) return run({ code: text.match(/\/ttd\/v\/(TTD-[A-Z0-9]+)/i)[1] }); // barcode versi lama
+    clear(result).appendChild(h('div', { class: 'callout bad' }, h('b', null, 'Bukan barcode TTD ' + BOOT.appName + '. '), 'Isi kode tidak dikenali.'));
+  }
+  form.addEventListener('submit', (e) => { e.preventDefault(); const v = $('#qv-code', form).value.trim(); if (v) run({ code: v }); });
+  card.append(scanBar, camBox, camStatus, form, result, h('div', { class: 'divider' }), h('button', { class: 'btn ghost', onclick: () => { stopCam(); goLogin(); } }, 'Masuk ke aplikasi'));
+  if (/^TTD-/i.test(BOOT.token || '')) run({ code: BOOT.token });
 };
