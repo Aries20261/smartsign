@@ -36,5 +36,15 @@ function isoOfPg(x: string): string {
   const frac = m[3] ? m[3].slice(0, 4) : '';
   return m[1] + 'T' + m[2] + frac + m[4] + ':' + (m[5] || '00');
 }
+/**
+ * Buang pool koneksi (dipakai bila sebuah query macet atau Postgres mengembalikan error).
+ * Pooler mode transaksi kadang meninggalkan koneksi dalam keadaan menggantung setelah error;
+ * request berikutnya akan membuka koneksi baru yang bersih.
+ */
+export function resetDb() {
+  const s = g.__smartsignSql;
+  g.__smartsignSql = undefined;
+  if (s) s.end({ timeout: 1 }).catch(() => { /* abaikan */ });
+}
 export type Tx = postgres.TransactionSql<Record<string, never>>;
 export type Q = Sql | Tx;

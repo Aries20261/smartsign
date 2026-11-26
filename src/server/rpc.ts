@@ -1,4 +1,5 @@
 import { ENV } from './config';
+import { resetDb } from './db';
 import { AppError } from './errors';
 import { rateBump } from './ratelimit';
 import { authorize, reqInfo, requireSession } from './session';
@@ -16,8 +17,23 @@ function sameOrigin(origin: string, host: string | null): boolean {
   } catch { return false; }
 }
 
-/** Gerbang tunggal API: CSRF, rate limit, sesi, otorisasi peran, dan amplop error yang aman. */
+const DEADLINE_MS = 25_000;
+/** Pengaman: bila satu aksi macet (mis. koneksi database menggantung), jawab dengan error yang jelas dan buang pool koneksi. */
 export async function handleRpc(req: Request): Promise<Response> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<Response>((resolve) => {
+    timer = setTimeout(() => {
+      console.error(JSON.stringify({ rpc: 'deadline', ms: DEADLINE_MS, path: new URL(req.url).pathname }));
+      resetDb();
+      resolve(new Response(JSON.stringify({ ok: false, code: 'BUSY', message: 'Server sedang sibuk atau koneksi database terputus. Silakan coba lagi.' }),
+        { status: 503, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } }));
+    }, DEADLINE_MS);
+  });
+  try { return await Promise.race([handleRpcInner(req), deadline]); } finally { clearTimeout(timer); }
+}
+
+/** Gerbang tunggal API: CSRF, rate limit, sesi, otorisasi peran, dan amplop error yang aman. */
+async function handleRpcInner(req: Request): Promise<Response> {
   const started = Date.now();
   let action = '';
   const json = (body: Envelope, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -53,6 +69,7 @@ export async function handleRpc(req: Request): Promise<Response> {
     console.error(JSON.stringify({ rpc: action, ms: Date.now() - started, msg: err?.message, stack: String(err?.stack || '').split('\n').slice(0, 6).join(' | ') }));
     // Tabel/kolom/fungsi belum ada = migrasi database terbaru belum dijalankan; beri petunjuk yang bisa ditindaklanjuti.
     const pgCode = String(err?.code || '');
+    if (/^[0-9A-Z]{5}$/.test(pgCode) || /CONNECTION|ECONN|timeout/i.test(String(err?.message || '') + pgCode)) resetDb(); // koneksi mungkin rusak setelah error
     if (pgCode === '42P01' || pgCode === '42703' || pgCode === '42883')
       return json({ ok: false, code: 'SERVER_ERROR', message: 'Database belum diperbarui. Admin perlu menjalankan file migrasi terbaru di Supabase SQL Editor (cek /api/health).' }, 500);
     return json({ ok: false, code: 'SERVER_ERROR', message: 'Terjadi kesalahan di server. Silakan coba lagi.' }, 500);
