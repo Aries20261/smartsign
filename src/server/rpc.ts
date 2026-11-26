@@ -51,6 +51,10 @@ export async function handleRpc(req: Request): Promise<Response> {
       return json({ ok: false, code: err.code, message: err.message, ...(err.fields ? { fields: err.fields } : {}) }, status);
     }
     console.error(JSON.stringify({ rpc: action, ms: Date.now() - started, msg: err?.message, stack: String(err?.stack || '').split('\n').slice(0, 6).join(' | ') }));
+    // Tabel/kolom/fungsi belum ada = migrasi database terbaru belum dijalankan; beri petunjuk yang bisa ditindaklanjuti.
+    const pgCode = String(err?.code || '');
+    if (pgCode === '42P01' || pgCode === '42703' || pgCode === '42883')
+      return json({ ok: false, code: 'SERVER_ERROR', message: 'Database belum diperbarui. Admin perlu menjalankan file migrasi terbaru di Supabase SQL Editor (cek /api/health).' }, 500);
     return json({ ok: false, code: 'SERVER_ERROR', message: 'Terjadi kesalahan di server. Silakan coba lagi.' }, 500);
   }
 }
