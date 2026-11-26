@@ -68,6 +68,10 @@ await rpc('doc.send', { id: doc.id });
 const inv = await mail(signerEmail, /Permintaan tanda tangan/);
 const signPath = inv.text.match(/\/sign\/[A-Za-z0-9_-]{20,}/)[0];
 
+// TTD Realtime: satu menunggu, satu ditandatangani lewat browser (lihat aksi di bawah)
+const qsPending = (await rpc('qsign.create', { signerName: 'Prof. Dr. Ahmad Fauzi, M.Si.', signerTitle: 'Direktur Jenderal Pendidikan Tinggi', purpose: 'Pengesahan Berita Acara Serah Terima BMN No. 12/BAST/2026', hours: 8 })).request;
+const qsSign = (await rpc('qsign.create', { signerName: 'Dr. Siti Rahmawati, M.Pd.', signerTitle: 'Kepala Bagian Umum', purpose: 'Persetujuan perjalanan dinas ke Surabaya, 2 sampai 4 Desember 2026', hours: 8 })).request;
+
 // --- browser ---
 const browser = await chromium.launch({ executablePath: process.env.CHROME || '/usr/bin/google-chrome', args: ['--no-sandbox'] });
 const issues = [];
@@ -88,7 +92,22 @@ async function shoot(name, path, { width = 1366, height = 860, auth = true, wait
   await page.screenshot({ path: OUT + '/' + name + '.png', fullPage: false });
   await ctx.close();
 }
+const drawAndSubmit = async (pg) => {
+  const box = await pg.locator('canvas.sig-pad').boundingBox();
+  await pg.mouse.move(box.x + 30, box.y + 120); await pg.mouse.down();
+  for (let i = 0; i <= 40; i++) await pg.mouse.move(box.x + 30 + i * 8, box.y + 100 - Math.sin(i / 3) * 40 + (i % 7) * 2, { steps: 2 });
+  await pg.mouse.up();
+  await pg.mouse.move(box.x + 120, box.y + 60); await pg.mouse.down(); await pg.mouse.move(box.x + 200, box.y + 140, { steps: 8 }); await pg.mouse.up();
+  await sleep(200);
+  await pg.screenshot({ path: OUT + '/21-ttd-penanda-isi.png' });
+  await pg.check('#f-consent');
+  await pg.click('button:has-text("Kirim tanda tangan")');
+  await pg.waitForSelector('text=Tanda tangan Anda sudah diterima', { timeout: 8000 });
+};
+const qsTok = (r) => r.link.slice(r.link.indexOf('/ttd?'));
 const shots = [
+  ['19-ttd-daftar', '/#/ttd'], ['20-ttd-link', '/#/ttd/' + qsPending.id, { wait: 1800 }],
+  ['21-ttd-penanda', qsTok(qsSign), { auth: false, act: drawAndSubmit }],
   ['00-beranda', '/', { auth: false }], ['00b-harga', '/', { auth: false, act: async (pg) => { await pg.evaluate(() => document.querySelector('#harga').scrollIntoView()); await sleep(300); } }],
   ['01-login', '/', { auth: false, act: async (pg) => { await pg.click('header button:has-text("Masuk")'); await sleep(400); } }], ['15-paket', '/#/billing'], ['16-platform-pengguna', '/#/platform'], ['17-platform-workspace', '/#/platform/workspaces'], ['18-platform-pembayaran', '/#/platform/payments'], ['02-dashboard', '/#/dashboard'], ['03-links', '/#/links'], ['04-analitik', '/#/analytics', { wait: 2000 }],
   ['05-qr', '/#/qr', { wait: 1800 }], ['06-dokumen', '/#/docs/' + doc.id, { wait: 2500 }], ['07-tim', '/#/team'], ['08-audit', '/#/audit'], ['09-keamanan', '/#/security'],
@@ -96,7 +115,22 @@ const shots = [
   ['13-perantara-password', '/go/' + pwLink.slug, { auth: false }], ['14-tidak-ditemukan', '/go/tidakada' + RUN, { auth: false }]
 ];
 for (const [n, p, o] of shots) await shoot(n, p, o);
-for (const [n, p, o] of [['m00-beranda', '/', { auth: false }], ['m01-login', '/', { auth: false, act: async (pg) => { await pg.click('header button:has-text("Masuk")'); await sleep(400); } }], ['m15-paket', '/#/billing'], ['m16-platform', '/#/platform'], ['m02-dashboard', '/#/dashboard'], ['m03-links', '/#/links'], ['m06-dokumen', '/#/docs/' + doc.id, { wait: 2500 }], ['m10-tanda-tangan', signPath, { auth: false, wait: 1500 }], ['m11-verifikasi', '/verify?code=' + doc.code, { auth: false, wait: 1800 }]])
+const qsDone = (await rpc('qsign.get', { id: qsSign.id })).request;
+if (qsDone.status !== 'signed') issues.push('TTD Realtime: tanda tangan lewat browser tidak tersimpan (' + qsDone.status + ')');
+for (const [n, p, o] of [['22-ttd-hasil', '/#/ttd/' + qsSign.id, { wait: 2500 }], ['23-ttd-verifikasi', '/ttd/v/' + qsDone.code, { auth: false, wait: 1500 }], ['24-ttd-daftar-selesai', '/#/ttd']]) await shoot(n, p, o);
+// unduhan spesimen/barcode harus menghasilkan PNG
+{
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 860 }, acceptDownloads: true }); await ctx.addCookies(cookies);
+  const pg = await ctx.newPage(); await pg.goto(BASE + '/#/ttd/' + qsSign.id, { waitUntil: 'networkidle' }); await sleep(1500);
+  for (const label of ['Unduh spesimen PNG', 'Unduh barcode PNG', 'Unduh tanda tangan PNG']) {
+    const [dl] = await Promise.all([pg.waitForEvent('download', { timeout: 8000 }), pg.click('button:has-text("' + label + '")')]);
+    const path = OUT + '/' + dl.suggestedFilename(); await dl.saveAs(path);
+    const head = (await import('node:fs')).readFileSync(path).subarray(0, 4).toString('hex');
+    if (head !== '89504e47') issues.push('unduhan ' + label + ' bukan PNG');
+  }
+  await ctx.close();
+}
+for (const [n, p, o] of [['m19-ttd-daftar', '/#/ttd'], ['m22-ttd-hasil', '/#/ttd/' + qsSign.id, { wait: 2500 }], ['m21-ttd-penanda', qsTok(qsPending), { auth: false }], ['m23-ttd-verifikasi', '/ttd/v/' + qsDone.code, { auth: false, wait: 1500 }], ['m00-beranda', '/', { auth: false }], ['m01-login', '/', { auth: false, act: async (pg) => { await pg.click('header button:has-text("Masuk")'); await sleep(400); } }], ['m15-paket', '/#/billing'], ['m16-platform', '/#/platform'], ['m02-dashboard', '/#/dashboard'], ['m03-links', '/#/links'], ['m06-dokumen', '/#/docs/' + doc.id, { wait: 2500 }], ['m10-tanda-tangan', signPath, { auth: false, wait: 1500 }], ['m11-verifikasi', '/verify?code=' + doc.code, { auth: false, wait: 1800 }]])
   await shoot(n, p, { ...(o || {}), width: 360, height: 780 });
 await browser.close();
 writeFileSync(OUT + '/console.txt', issues.join('\n') || 'Tidak ada error konsol / CSP / overflow.');

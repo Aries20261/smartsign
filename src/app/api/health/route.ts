@@ -29,6 +29,10 @@ export async function GET() {
     checks.database = 'OK';
     try { await db()`select 1 from payments limit 1`; await db()`select public.session_active(gen_random_uuid(), gen_random_uuid())`; checks.migrasi = 'OK'; }
     catch { checks.migrasi = 'GAGAL: Jalankan supabase/migrations/20261125000000_billing.sql di SQL Editor.'; }
+    if (checks.migrasi === 'OK') {
+      try { await db()`select 1 from sign_requests limit 1`; }
+      catch { checks.migrasi = 'GAGAL: Jalankan supabase/migrations/20261126000000_quick_sign.sql di SQL Editor.'; }
+    }
   } catch (e: any) { checks.database = 'GAGAL: ' + hint(String(e?.message || e)); }
   try {
     const r = await fetch(ENV.supabaseUrl + '/auth/v1/settings', { headers: { apikey: ENV.supabasePublicKey } });

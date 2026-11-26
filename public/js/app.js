@@ -4,7 +4,7 @@
 const ROLE_ALL = ['admin', 'editor', 'viewer', 'auditor'];
 const NAV = [
   { group: 'Utama', items: [['dashboard', 'Dasbor', 'home', ROLE_ALL], ['links', 'Shortlink', 'link', ROLE_ALL], ['qr', 'QR & Barcode', 'qr', ROLE_ALL],
-    ['docs', 'E-Signature', 'sign', ROLE_ALL], ['scanner', 'Scanner', 'scan', ROLE_ALL], ['analytics', 'Analitik', 'chart', ROLE_ALL]] },
+    ['docs', 'E-Signature', 'sign', ROLE_ALL], ['ttd', 'TTD Realtime', 'clock', ROLE_ALL], ['scanner', 'Scanner', 'scan', ROLE_ALL], ['analytics', 'Analitik', 'chart', ROLE_ALL]] },
   { group: 'Kelola', items: [['team', 'Tim & Anggota', 'team', ['admin']], ['security', 'Keamanan Akun', 'shield', ROLE_ALL],
     ['audit', 'Log Audit', 'log', ['admin', 'auditor']], ['billing', 'Paket & Tagihan', 'check', ROLE_ALL], ['settings', 'Pengaturan', 'gear', ['admin']]] }
 ];

@@ -259,3 +259,10 @@ td .title{font-weight:600}
 .current-plan h2{font-size:1.4rem}
 @media (max-width:640px){.home-top .hide-sm{display:none}}
 #content:focus,#content:focus-visible{outline:none}
+/* TTD Realtime */
+.qs-grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:1100px){.qs-grid{grid-template-columns:minmax(0,1fr)}}
+.qs-sig,.qs-spec,.qs-bar{border:1px solid var(--border);border-radius:10px;padding:10px;display:flex;align-items:center;justify-content:center;min-height:140px;
+  background-color:#fff;background-image:linear-gradient(45deg,#eef1f6 25%,transparent 25%),linear-gradient(-45deg,#eef1f6 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#eef1f6 75%),linear-gradient(-45deg,transparent 75%,#eef1f6 75%);
+  background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0}
+.qs-sig img,.qs-spec img,.qs-bar img{max-width:100%;max-height:260px;height:auto}

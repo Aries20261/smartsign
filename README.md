@@ -22,6 +22,7 @@ Dibangun dengan **Next.js 16 (App Router) + Supabase (Postgres, Auth, Storage)**
 | Shortlink publik | Siapa pun bisa memendekkan tautan di beranda tanpa login (dibatasi 10/jam & 30/hari per IP, cek keamanan tetap berjalan). Setelah login/daftar di browser yang sama, tautan otomatis pindah ke akun dan slugnya bisa diganti. Slug lama tidak bisa dipakai orang lain |
 | Paket & pembayaran | Gratis, Pro 3 bulan (Rp50.000), Lifetime (Rp100.000). Pembayaran lewat Mayar.id (QRIS, transfer, e-wallet). Status selalu diverifikasi ulang ke API Mayar, idempoten, dicek ulang tiap hari oleh cron |
 | E-signature berbayar | Mengirim dokumen ke klien untuk ditandatangani hanya untuk paket Pro/Lifetime (atau dibuka manual oleh superadmin). Klien penanda tangan tidak perlu akun maupun membayar |
+| TTD Realtime | Pengguna berbayar mengisi nama pejabat, jabatan, dan tujuan, lalu mendapat link `/ttd?token=…` (default berlaku 8 jam, bisa 1 jam sampai 3 hari, PIN opsional, sekali pakai). Penanda tangan menggambar tanda tangan tanpa akun. Hasilnya langsung muncul di menu TTD Realtime (diperbarui otomatis) dan bisa diunduh sebagai PNG tanda tangan, barcode TTD, atau spesimen (tanda tangan + barcode). Barcode mengarah ke halaman verifikasi publik `/ttd/v/<kode>` |
 | Panel superadmin | Kelola pengguna (nonaktifkan, jadikan superadmin), reset password (kirim tautan atau password sementara yang wajib diganti), reset MFA, ubah paket/masa aktif/akses e-sign, daftar pembayaran |
 | Audit & keamanan | Log audit append-only berantai hash (trigger DB), verifikasi rantai, log keamanan, laporan penyalahgunaan publik, retensi data via cron |
 
@@ -77,7 +78,7 @@ CRON_SECRET=<acak>
 1. Buat proyek baru di [supabase.com](https://supabase.com) (region yang sama dengan `regions` di `vercel.json` (saat ini Sydney `ap-southeast-2` ↔ Vercel `syd1`; ganti ke `sin1` bila proyek Supabase di Singapore)).
 2. Terapkan skema database, pilih salah satu:
    - `supabase link --project-ref <ref>` lalu `supabase db push`, atau
-   - buka **SQL Editor**, jalankan **berurutan** isi `supabase/migrations/20261124000000_init.sql`, lalu `supabase/migrations/20261125000000_billing.sql` (masing-masing **Run**). Keduanya aman dijalankan ulang.
+   - buka **SQL Editor**, jalankan **berurutan** isi `supabase/migrations/20261124000000_init.sql`, lalu `supabase/migrations/20261125000000_billing.sql`, lalu `supabase/migrations/20261126000000_quick_sign.sql` (masing-masing **Run**). Keduanya aman dijalankan ulang.
 3. **Authentication → Sign In / Providers → Email**: aktifkan *Confirm email*. Minimal password 10.
 4. **Authentication → Multi-Factor**: aktifkan **TOTP** (enroll + verify).
 5. **Authentication → URL Configuration**:

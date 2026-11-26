@@ -6,7 +6,7 @@ import { rateLimit, rateBump, rateCount } from '../ratelimit';
 import { platformSettings, requireReauth, wsSettings, type Ctx } from '../session';
 import { randomToken, bool, hashSecret, int, isPast, ms, paginate, parseDateInput, parseUa, randomSlug, sha256Hex, str, todayWib, verifySecret, addSecIso } from '../util';
 
-export const RESERVED_SLUGS = ['admin', 'api', 'app', 'login', 'logout', 'masuk', 'daftar', 'verify', 'verifikasi', 'sign', 's', 'go', 'help', 'bantuan',
+export const RESERVED_SLUGS = ['admin', 'api', 'app', 'login', 'logout', 'masuk', 'daftar', 'verify', 'verifikasi', 'sign', 'ttd', 's', 'go', 'help', 'bantuan',
   'static', 'assets', 'vendor', 'js', 'dashboard', 'settings', 'reset', 'invite', 'report', 'auth', 'favicon.ico', 'robots.txt', 'sitemap.xml', '_next'];
 const SHORTENERS = ['bit.ly', 'bitly.com', 'tinyurl.com', 't.co', 'goo.gl', 's.id', 'ow.ly', 'is.gd', 'buff.ly', 'cutt.ly', 'rebrand.ly', 'shorturl.at', 'rb.gy', 't.ly', 'tiny.cc', 'v.gd', 'lnkd.in'];
 const RISKY_TLDS = ['zip', 'mov', 'xyz', 'top', 'click', 'gq', 'tk', 'ml', 'cf', 'ga', 'work', 'rest', 'kim', 'loan', 'buzz', 'cam', 'icu', 'cyou', 'sbs'];

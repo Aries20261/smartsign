@@ -264,4 +264,4 @@ PublicPages.invite = (root) => {
   });
 };
 
-App.start();
+document.addEventListener('DOMContentLoaded', () => App.start()); // setelah semua skrip defer (termasuk ttd.js) dimuat

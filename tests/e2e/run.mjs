@@ -3,6 +3,7 @@
 // Jalankan: node tests/e2e/run.mjs   (BASE=http://localhost:3000 MAILPIT=http://127.0.0.1:54324)
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { crc32, deflateSync } from 'node:zlib';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 
 const BASE = process.env.BASE || 'http://localhost:3000';
@@ -114,6 +115,15 @@ async function makePdf(pages = 2) {
   for (let i = 0; i < pages; i++) { const p = doc.addPage([595, 842]); p.drawText('Perjanjian uji ' + RUN + ' halaman ' + (i + 1), { x: 60, y: 760, size: 14, font: f }); }
   return Buffer.from(await doc.save());
 }
+// PNG RGBA berisi goresan acak (cukup besar untuk lolos pemeriksaan "tidak kosong")
+function makePng(w, hgt) {
+  const chunk = (type, data) => { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const td = Buffer.concat([Buffer.from(type), data]); const c = Buffer.alloc(4); c.writeUInt32BE(crc32(td) >>> 0); return Buffer.concat([len, td, c]); };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(hgt, 4); ihdr[8] = 8; ihdr[9] = 6;
+  const raw = Buffer.alloc((w * 4 + 1) * hgt);
+  for (let y = 0; y < hgt; y++) for (let x = 0; x < w; x++) { const o = y * (w * 4 + 1) + 1 + x * 4; if (Math.abs(y - hgt / 2 - Math.sin(x / 9) * hgt / 3) < 3) { raw[o + 2] = 102; raw[o + 3] = 255; } else if ((x * 7 + y * 13) % 97 === 0) raw[o + 3] = 20; }
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+const SIG = makePng(320, 90);
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
 const PW = 'Lembayung-Senja-2026';
@@ -570,6 +580,61 @@ await test('Supabase REST langsung (anon key) tidak bisa membaca tabel', async (
 });
 
 
+/* ---------- TTD Realtime ---------- */
+await test('TTD Realtime: link 8 jam, tanda tangan tanpa akun, unduh & verifikasi barcode', async () => {
+  await carol.fail('qsign.create', { signerName: 'X Y', signerTitle: 'Kepala', purpose: 'Uji paywall' }, 'PAYMENT_REQUIRED');
+  await alice.fail('qsign.create', { signerName: '', signerTitle: '', purpose: '' }, 'VALIDATION');
+  await alice.fail('qsign.create', { signerName: 'Ab', signerTitle: 'Kepala', purpose: 'Uji', hours: 5 }, 'VALIDATION');
+  const r = (await alice.api('qsign.create', { signerName: 'Dr. Siti Rahmawati', signerTitle: 'Kepala Bagian Umum', purpose: 'Pengesahan BAST BMN ' + RUN, hours: 8 })).request;
+  const m = r.link.match(/\/ttd\?token=([0-9a-f-]{36})$/);
+  assert(m, 'format link ' + r.link);
+  const hrs = (Date.parse(r.expiresAt) - Date.now()) / 3600000;
+  assert(hrs > 7.9 && hrs <= 8.01, 'masa berlaku ' + hrs.toFixed(2) + ' jam');
+  const token = m[1];
+  const page = await anon.get('/ttd?token=' + token);
+  assert(page.status === 200 && /"mode":"qsign"/.test(await page.text()), 'halaman /ttd');
+  const o = await anon.api('qsign.open', { token });
+  assert(o.status === 'pending' && o.signerName === 'Dr. Siti Rahmawati' && !o.needPin && !o.code, 'open ' + JSON.stringify(o));
+  assert((await alice.api('qsign.get', { id: r.id })).request.link === r.link, 'admin tidak bisa menyalin ulang link');
+  await anon.fail('qsign.submit', { token, consent: false, signatureImage: SIG.toString('base64') }, 'VALIDATION');
+  await anon.fail('qsign.submit', { token, consent: true, signatureImage: PNG.toString('base64') }, 'VALIDATION');
+  await anon.fail('qsign.submit', { token, consent: true, signatureImage: Buffer.from('GIF89a' + 'x'.repeat(300)).toString('base64') }, 'VALIDATION');
+  const s = await anon.api('qsign.submit', { token, consent: true, signatureType: 'draw', signatureImage: 'data:image/png;base64,' + SIG.toString('base64') });
+  assert(s.status === 'signed' && /^TTD-[A-Z0-9]{10}$/.test(s.code), 'submit ' + JSON.stringify(s));
+  await anon.fail('qsign.submit', { token, consent: true, signatureImage: SIG.toString('base64') }, 'CONFLICT');
+  const g = (await alice.api('qsign.get', { id: r.id })).request;
+  assert(g.status === 'signed' && g.link === null && g.signatureImage === 'data:image/png;base64,' + SIG.toString('base64') && g.verifyUrl.endsWith('/ttd/v/' + s.code), 'detail setelah ttd');
+  const l = await alice.api('qsign.list', { status: 'signed' });
+  assert(l.rows.some((x) => x.id === r.id) && l.counts.signed >= 1, 'daftar');
+  const v = await anon.api('qsign.verify', { code: s.code.toLowerCase() });
+  assert(v.valid && v.signerTitle === 'Kepala Bagian Umum' && v.recordHash === g.recordHash && !('signatureImage' in v), 'verifikasi publik');
+  assert((await anon.get('/ttd/v/' + s.code)).status === 200, 'halaman verifikasi');
+  await anon.fail('qsign.verify', { code: 'TTD-TIDAKADA00' }, 'NOT_FOUND');
+  await carol.fail('qsign.get', { id: r.id }, 'NOT_FOUND');
+  assert(psql(`select count(*) from audit_log where action = 'qsign.signed' and entity_id = '${r.id}'`) === '1', 'audit');
+});
+await test('TTD Realtime: kedaluwarsa, PIN salah dibatasi, buat ulang link, batal', async () => {
+  const r = (await alice.api('qsign.create', { signerName: 'Budi Hartono', signerTitle: 'Direktur', purpose: 'Uji PIN ' + RUN, hours: 1, pin: '4821' })).request;
+  const t = r.link.split('token=')[1];
+  assert((await anon.api('qsign.open', { token: t })).needPin, 'PIN tidak diminta');
+  for (let i = 0; i < 5; i++) await anon.fail('qsign.submit', { token: t, pin: '0000', consent: true, signatureImage: SIG.toString('base64') }, 'VALIDATION');
+  await anon.fail('qsign.submit', { token: t, pin: '4821', consent: true, signatureImage: SIG.toString('base64') }, 'RATE_LIMIT');
+  psql(`update sign_requests set expires_at = now() - interval '1 minute' where id = '${r.id}'`);
+  assert((await anon.api('qsign.open', { token: t })).status === 'expired', 'tidak kedaluwarsa');
+  assert((await alice.api('qsign.list', { status: 'expired' })).rows.some((x) => x.id === r.id), 'filter kedaluwarsa');
+  const n = (await alice.api('qsign.renew', { id: r.id, hours: 8 })).request;
+  const t2 = n.link.split('token=')[1];
+  assert(t2 && t2 !== t && n.status === 'pending', 'link baru');
+  await anon.fail('qsign.open', { token: t }, 'NOT_FOUND');
+  const s = await anon.api('qsign.submit', { token: t2, pin: '4821', consent: true, signatureImage: SIG.toString('base64') });
+  assert(s.status === 'signed', 'ttd setelah buat ulang link');
+  await alice.fail('qsign.renew', { id: r.id }, 'CONFLICT');
+  const c = (await alice.api('qsign.create', { signerName: 'Rina Wati', signerTitle: 'Sekretaris', purpose: 'Uji batal ' + RUN })).request;
+  await alice.api('qsign.cancel', { id: c.id });
+  const tc = c.link.split('token=')[1];
+  assert((await anon.api('qsign.open', { token: tc })).status === 'cancelled', 'status batal');
+  await anon.fail('qsign.submit', { token: tc, consent: true, signatureImage: SIG.toString('base64') }, 'CONFLICT');
+});
 await test('Webhook Mayar mengaktifkan Lifetime setelah verifikasi ulang ke API', async () => {
   await carol.fail('doc.uploadUrl', { fileName: 'a.pdf', size: 1000 }, 'PAYMENT_REQUIRED');
   await carol.api('billing.checkout', { plan: 'lifetime', mobile: '+6281234567890' });
@@ -641,7 +706,7 @@ await test('Superadmin: reset MFA dan beri akses e-sign manual pada paket gratis
 await test('Jejak audit: rantai hash utuh + ekspor butuh reauth', async () => {
   const v = await alice.api('audit.verify', {});
   assert(v.ok === true, 'rantai audit rusak: ' + JSON.stringify(v));
-  const list = await alice.api('audit.list', {});
+  const list = await alice.api('audit.list', { pageSize: 100 });
   assert((list.rows || []).some((r) => r.action === 'doc.upload'), 'aksi tidak tercatat');
   const ex = await alice.raw('audit.export', {});
   assert(ex.ok || ex.code === 'REAUTH_REQUIRED', 'ekspor audit: ' + ex.code);

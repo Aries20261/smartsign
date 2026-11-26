@@ -5,6 +5,7 @@ import * as D from './services/docs';
 import * as S from './services/scan';
 import * as M from './services/admin';
 import * as B from './services/billing';
+import * as Q from './services/qsign';
 
 type Fn = (p: any, u: Ctx, info: ReqInfo) => Promise<unknown>;
 type PubFn = (p: any, u: null, info: ReqInfo) => Promise<unknown>;
@@ -45,6 +46,10 @@ export const ROUTES: Record<string, Route> = {
   'sign.submit': { roles: null, fn: (p, _u, i) => D.signSubmit(p, i), limit: 20 },
   'sign.decline': { roles: null, fn: (p) => D.signDecline(p), limit: 20 },
   'sign.cert': { roles: null, fn: (p) => D.signDownloadCert(p) },
+  // TTD Realtime: penanda tangan lewat tautan berbatas waktu (tanpa akun)
+  'qsign.open': { roles: null, fn: (p) => Q.qsignOpen(p), limit: 60 },
+  'qsign.submit': { roles: null, fn: (p, _u, i) => Q.qsignSubmit(p, i), limit: 20 },
+  'qsign.verify': { roles: null, fn: (p) => Q.qsignVerify(p), limit: 60 },
   // Akun sendiri
   'auth.me': { roles: ALL, fn: A.getMe, mfaSetupOk: true },
   'auth.logout': { roles: ALL, fn: A.logout, mfaSetupOk: true },
@@ -74,6 +79,12 @@ export const ROUTES: Record<string, Route> = {
   'link.export': { roles: ['admin', 'editor', 'auditor'], fn: L.exportLinks },
   'link.exportClicks': { roles: ['admin', 'editor', 'auditor'], fn: L.exportClicks },
   'link.claim': { roles: EDIT, fn: L.claimLinks },
+  // TTD Realtime
+  'qsign.list': { roles: READ, fn: Q.qsignList },
+  'qsign.get': { roles: READ, fn: Q.qsignGet },
+  'qsign.create': { roles: EDIT, fn: Q.qsignCreate },
+  'qsign.renew': { roles: EDIT, fn: Q.qsignRenew },
+  'qsign.cancel': { roles: EDIT, fn: Q.qsignCancel },
   'code.save': { roles: EDIT, fn: L.saveCodeAsset },
   // Dokumen
   'doc.list': { roles: READ, fn: D.listDocs },
